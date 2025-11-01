@@ -13,6 +13,7 @@ export interface StatusCompletedResponse {
   status: "completed";
   account_id: string;
   token: string;
+  refresh_token: string;
   message: string;
 }
 
@@ -37,6 +38,12 @@ export interface MeResponse {
     account_status: string;
     resources: UserResource[];
   };
+}
+
+export interface RefreshTokenResponse {
+  token: string;
+  refresh_token: string;
+  message: string;
 }
 
 export interface LogoutResponse {

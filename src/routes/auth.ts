@@ -4,8 +4,21 @@ import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { handleOAuthCallback } from "../services/oauth.js";
-import { storeTokens, deleteTokens } from "../services/token-store.js";
-import { generateCliSessionToken } from "../services/auth.js";
+import {
+  storeUserTokens,
+  deleteUserTokens,
+  storeCliSession,
+  deleteCliSession,
+  getCliSessionByRefreshToken,
+  deleteCliSessionByRefreshToken,
+} from "../services/db-store.js";
+import {
+  generateCliSessionToken,
+  generateRefreshToken,
+} from "../services/auth.js";
+import { ENV } from "../config/env.js";
+import { validateRefreshTokenExpiration } from "../utils/validation.js";
+import { parseDurationToMs } from "../utils/time.js";
 import { cliAuthMiddleware } from "../middleware/cli-auth.js";
 import { buildAuthorizationUrl, generateOAuthState } from "../utils/oauth.js";
 import {
@@ -49,7 +62,17 @@ authRouter.get("/callback", async (c) => {
   try {
     const { tokens, user, resources } = await handleOAuthCallback(code);
 
-    storeTokens(
+    if (!tokens.refresh_token) {
+      return c.json(
+        {
+          error: "Failed to complete OAuth flow",
+          details: "No refresh token received from Atlassian",
+        },
+        500
+      );
+    }
+
+    storeUserTokens(
       user.account_id,
       tokens.access_token,
       tokens.refresh_token,
@@ -100,14 +123,22 @@ authRouter.get("/status/:state", async (c) => {
     return c.json({ error: "Invalid state" }, 400);
   }
 
-  const cliToken = generateCliSessionToken(accountId);
+  const sessionToken = generateCliSessionToken(accountId);
+  const refreshToken = generateRefreshToken();
+
+  const refreshExpiresInMs = validateRefreshTokenExpiration(
+    ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
+  );
+
+  storeCliSession(sessionToken, refreshToken, accountId, refreshExpiresInMs);
 
   removeState(state);
 
   return c.json({
     status: "completed",
     account_id: accountId,
-    token: cliToken,
+    token: sessionToken,
+    refresh_token: refreshToken,
     message:
       "Authorization completed successfully. Use the token in Authorization header for future requests.",
   });
@@ -131,10 +162,51 @@ authRouter.get("/me", cliAuthMiddleware(), (c) => {
   });
 });
 
+authRouter.post("/refresh", async (c) => {
+  const body = await c.req.json();
+  const { refresh_token } = body;
+
+  if (!refresh_token) {
+    return c.json({ error: "Missing refresh_token" }, 400);
+  }
+
+  const session = getCliSessionByRefreshToken(refresh_token);
+
+  if (!session || Date.now() > session.expires_at) {
+    return c.json({ error: "Invalid or expired refresh token" }, 401);
+  }
+
+  const newSessionToken = generateCliSessionToken(session.account_id);
+  const newRefreshToken = generateRefreshToken();
+
+  deleteCliSessionByRefreshToken(refresh_token);
+
+  const refreshExpiresInMs = validateRefreshTokenExpiration(
+    ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
+  );
+  storeCliSession(
+    newSessionToken,
+    newRefreshToken,
+    session.account_id,
+    refreshExpiresInMs
+  );
+
+  return c.json({
+    token: newSessionToken,
+    refresh_token: newRefreshToken,
+    message: "Token refreshed successfully",
+  });
+});
+
 authRouter.post("/logout", cliAuthMiddleware(), (c) => {
   const accountId = c.get("account_id");
+  const sessionToken = c.get("session_token");
 
-  deleteTokens(accountId);
+  if (sessionToken) {
+    deleteCliSession(sessionToken);
+  }
+
+  deleteUserTokens(accountId);
 
   return c.json({
     message: "Logged out successfully",

@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import type {
   JiraCredentials,
   JwtPayload,
@@ -27,4 +28,8 @@ export function generateCliSessionToken(accountId: string): string {
 
 export function verifyCliSessionToken(token: string): CliSessionPayload {
   return jwt.verify(token, ENV.JWT_SECRET) as CliSessionPayload;
+}
+
+export function generateRefreshToken(): string {
+  return crypto.randomBytes(32).toString("hex");
 }

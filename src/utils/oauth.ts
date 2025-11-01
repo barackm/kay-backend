@@ -6,7 +6,12 @@ export function generateOAuthState(): string {
 }
 
 export function buildAuthorizationUrl(state: string): string {
-  const scopes = ["read:me", "read:jira-work", "read:jira-user"].join(" ");
+  const scopes = [
+    "read:me",
+    "read:jira-work",
+    "read:jira-user",
+    "offline_access",
+  ].join(" ");
 
   const params = new URLSearchParams({
     audience: "api.atlassian.com",

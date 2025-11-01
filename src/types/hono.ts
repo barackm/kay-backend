@@ -6,5 +6,6 @@ declare module "hono" {
     user: UserContext;
     account_id: string;
     atlassian_tokens: StoredToken;
+    session_token: string;
   }
 }

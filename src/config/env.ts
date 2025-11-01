@@ -6,8 +6,14 @@ export const ENV = {
   PORT: Number(process.env.PORT) || 4000,
   JWT_SECRET: process.env.JWT_SECRET || "your-secret-key-change-in-production",
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
-  CLI_SESSION_EXPIRES_IN: process.env.CLI_SESSION_EXPIRES_IN || "30d",
+  CLI_SESSION_EXPIRES_IN: process.env.CLI_SESSION_EXPIRES_IN || "30m",
+  CLI_REFRESH_TOKEN_EXPIRES_IN:
+    process.env.CLI_REFRESH_TOKEN_EXPIRES_IN || "7d",
   ATLASSIAN_CLIENT_ID: process.env.ATLASSIAN_CLIENT_ID || "",
   ATLASSIAN_CLIENT_SECRET: process.env.ATLASSIAN_CLIENT_SECRET || "",
   ATLASSIAN_REDIRECT_URI: process.env.ATLASSIAN_REDIRECT_URI || "",
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  OPENAI_MODEL: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  OPENAI_MAX_TOKENS: Number(process.env.OPENAI_MAX_TOKENS) || 2000,
+  OPENAI_TEMPERATURE: Number(process.env.OPENAI_TEMPERATURE) || 0.7,
 };
