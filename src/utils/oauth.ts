@@ -10,6 +10,7 @@ export function buildAuthorizationUrl(state: string): string {
     "read:me",
     "read:jira-work",
     "read:jira-user",
+    "write:jira-work",
     "offline_access",
   ].join(" ");
 

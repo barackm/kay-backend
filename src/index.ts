@@ -10,6 +10,8 @@ import { ENV } from "./config/env.js";
 import "./services/database.js";
 import authRouter from "./routes/auth.js";
 import askRouter from "./routes/ask.js";
+import mcpRouter from "./routes/mcp.js";
+import healthRouter from "./routes/health.js";
 import "./types/hono.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +24,8 @@ app.use("*", cors());
 
 app.get("/", (c) => c.json({ message: "Kay Backend running ✅" }));
 
+app.route("/health", healthRouter);
+
 app.get("/assets/images/logo_orange_kay.png", (c) => {
   const logoPath = join(__dirname, "assets/images/logo_orange_kay.png");
   const logo = readFileSync(logoPath);
@@ -32,6 +36,7 @@ app.get("/assets/images/logo_orange_kay.png", (c) => {
 
 app.route("/auth", authRouter);
 app.route("/", askRouter);
+app.route("/mcp", mcpRouter);
 
 serve({
   fetch: app.fetch,

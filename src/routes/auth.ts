@@ -19,7 +19,7 @@ import {
 import { ENV } from "../config/env.js";
 import { validateRefreshTokenExpiration } from "../utils/validation.js";
 import { parseDurationToMs } from "../utils/time.js";
-import { cliAuthMiddleware } from "../middleware/cli-auth.js";
+import { authMiddleware } from "../middleware/auth.js";
 import { buildAuthorizationUrl, generateOAuthState } from "../utils/oauth.js";
 import {
   storeState,
@@ -144,7 +144,7 @@ authRouter.get("/status/:state", async (c) => {
   });
 });
 
-authRouter.get("/me", cliAuthMiddleware(), (c) => {
+authRouter.get("/me", authMiddleware(), (c) => {
   const tokens = c.get("atlassian_tokens");
   const accountId = c.get("account_id");
 
@@ -198,7 +198,7 @@ authRouter.post("/refresh", async (c) => {
   });
 });
 
-authRouter.post("/logout", cliAuthMiddleware(), (c) => {
+authRouter.post("/logout", authMiddleware(), (c) => {
   const accountId = c.get("account_id");
   const sessionToken = c.get("session_token");
 

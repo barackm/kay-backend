@@ -10,11 +10,18 @@ const promptsDir = join(__dirname, "../prompts");
 let systemPromptCache: string | null = null;
 let interactivePromptCache: string | null = null;
 
-export function getSystemPrompt(userInfo?: {
-  name?: string;
-  email?: string;
-  accountId?: string;
-}): string {
+export function getSystemPrompt(
+  userInfo?: {
+    name?: string;
+    email?: string;
+    accountId?: string;
+    projects?: Array<{ key: string; name: string }>;
+  },
+  availableTools?: Array<{
+    name: string;
+    description?: string;
+  }>
+): string {
   let basePrompt: string;
 
   if (systemPromptCache) {
@@ -32,6 +39,8 @@ export function getSystemPrompt(userInfo?: {
     }
   }
 
+  let fullPrompt = basePrompt;
+
   if (userInfo) {
     const userContext = [];
     if (userInfo.name) userContext.push(`User's name: ${userInfo.name}`);
@@ -40,18 +49,36 @@ export function getSystemPrompt(userInfo?: {
       userContext.push(`User's Atlassian account ID: ${userInfo.accountId}`);
 
     if (userContext.length > 0) {
-      return `${basePrompt}\n\n## Current User\n${userContext.join("\n")}`;
+      fullPrompt = `${fullPrompt}\n\n## Current User\n${userContext.join(
+        "\n"
+      )}`;
     }
   }
 
-  return basePrompt;
+  if (availableTools && availableTools.length > 0) {
+    const toolList = availableTools
+      .map(
+        (tool) => `- **${tool.name}**: ${tool.description || "Available tool"}`
+      )
+      .join("\n");
+    fullPrompt = `${fullPrompt}\n\n## Available Tools\nYou have access to the following Jira tools. When a user asks you to perform Jira operations, USE THESE TOOLS instead of explaining how to do it manually. Execute actions directly:\n\n${toolList}\n\nIMPORTANT: When users request Jira actions (like listing tickets, creating issues, searching, etc.), you MUST use the available tools. Do not tell them you cannot access Jira - you have full access through these tools.`;
+  }
+
+  return fullPrompt;
 }
 
-export function getInteractivePrompt(userInfo?: {
-  name?: string;
-  email?: string;
-  accountId?: string;
-}): string {
+export function getInteractivePrompt(
+  userInfo?: {
+    name?: string;
+    email?: string;
+    accountId?: string;
+    projects?: Array<{ key: string; name: string }>;
+  },
+  availableTools?: Array<{
+    name: string;
+    description?: string;
+  }>
+): string {
   let basePrompt: string;
 
   if (interactivePromptCache) {
@@ -69,6 +96,8 @@ export function getInteractivePrompt(userInfo?: {
     }
   }
 
+  let fullPrompt = basePrompt;
+
   if (userInfo) {
     const userContext = [];
     if (userInfo.name) userContext.push(`User's name: ${userInfo.name}`);
@@ -76,12 +105,30 @@ export function getInteractivePrompt(userInfo?: {
     if (userInfo.accountId)
       userContext.push(`User's Atlassian account ID: ${userInfo.accountId}`);
 
+    if (userInfo.projects && userInfo.projects.length > 0) {
+      const projectsList = userInfo.projects
+        .map((p) => `- **${p.key}**: ${p.name}`)
+        .join("\n");
+      userContext.push(`User's accessible Jira projects:\n${projectsList}`);
+    }
+
     if (userContext.length > 0) {
-      return `${basePrompt}\n\n## Current User\n${userContext.join("\n")}`;
+      fullPrompt = `${fullPrompt}\n\n## Current User\n${userContext.join(
+        "\n"
+      )}`;
     }
   }
 
-  return basePrompt;
+  if (availableTools && availableTools.length > 0) {
+    const toolList = availableTools
+      .map(
+        (tool) => `- **${tool.name}**: ${tool.description || "Available tool"}`
+      )
+      .join("\n");
+    fullPrompt = `${fullPrompt}\n\n## Available Tools\nYou have access to the following Jira tools. When a user asks you to perform Jira operations, USE THESE TOOLS instead of explaining how to do it manually. Execute actions directly:\n\n${toolList}\n\nIMPORTANT: When users request Jira actions (like listing tickets, creating issues, searching, etc.), you MUST use the available tools. Do not tell them you cannot access Jira - you have full access through these tools.`;
+  }
+
+  return fullPrompt;
 }
 
 export function reloadPrompts(): void {

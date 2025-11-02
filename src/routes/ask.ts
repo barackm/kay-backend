@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { cliAuthMiddleware } from "../middleware/cli-auth.js";
+import { authMiddleware } from "../middleware/auth.js";
 import { AskService } from "../services/ask-service.js";
 import type {
   AskRequest,
@@ -10,7 +10,7 @@ import type {
 const askRouter = new Hono();
 const askService = new AskService();
 
-askRouter.post("/ask", cliAuthMiddleware(), async (c) => {
+askRouter.post("/ask", authMiddleware(), async (c) => {
   try {
     const body = (await c.req.json()) as AskRequest;
 
@@ -51,7 +51,7 @@ askRouter.post("/ask", cliAuthMiddleware(), async (c) => {
   }
 });
 
-askRouter.post("/ask/confirm", cliAuthMiddleware(), async (c) => {
+askRouter.post("/ask/confirm", authMiddleware(), async (c) => {
   try {
     const body = (await c.req.json()) as ConfirmationRequest;
 

@@ -1,7 +1,14 @@
 import type { AskRequest, AskResponse } from "../types/ask.js";
 import type { StoredToken } from "../types/oauth.js";
-import { createChatCompletion, isOpenAIConfigured } from "./openai-service.js";
+import {
+  createChatCompletion,
+  isOpenAIConfigured,
+  type ChatMessage,
+} from "./openai-service.js";
 import { getSystemPrompt, getInteractivePrompt } from "./prompt-service.js";
+import { MCPJiraService } from "./mcp-jira-service.js";
+import { convertMCPToolsToOpenAI } from "../utils/mcp-tools.js";
+import { ENV } from "../config/env.js";
 import {
   storeInteractiveSession as dbStoreInteractiveSession,
   getInteractiveSession as dbGetInteractiveSession,
@@ -21,25 +28,109 @@ export interface AskServiceContext {
 }
 
 export class AskService {
+  private jiraService: MCPJiraService | null = null;
+
+  private async fetchUserProjects(
+    context: AskServiceContext
+  ): Promise<Array<{ key: string; name: string }>> {
+    const jiraResource = context.atlassianTokens.resources.find((r) =>
+      r.url.includes("atlassian.net")
+    );
+
+    if (!jiraResource) {
+      return [];
+    }
+
+    let accessToken = context.atlassianTokens.access_token;
+
+    if (Date.now() >= context.atlassianTokens.expires_at) {
+      try {
+        const { getUserTokens } = await import("./db-store.js");
+        const { ENV } = await import("../config/env.js");
+
+        const response = await fetch("https://auth.atlassian.com/oauth/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            grant_type: "refresh_token",
+            client_id: ENV.ATLASSIAN_CLIENT_ID,
+            client_secret: ENV.ATLASSIAN_CLIENT_SECRET,
+            refresh_token: context.atlassianTokens.refresh_token,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          accessToken = data.access_token;
+        }
+      } catch (error) {
+        return [];
+      }
+    }
+
+    try {
+      const response = await fetch(
+        `${jiraResource.url}/rest/api/3/project/search?maxResults=100`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data = await response.json();
+      return (data.values || []).map(
+        (project: { key: string; name: string }) => ({
+          key: project.key,
+          name: project.name,
+        })
+      );
+    } catch (error) {
+      return [];
+    }
+  }
+
+  private async getJiraService(
+    context: AskServiceContext
+  ): Promise<MCPJiraService | null> {
+    if (!ENV.MCP_JIRA_ENABLED) {
+      return null;
+    }
+
+    if (!this.jiraService || !this.jiraService.isInitialized()) {
+      try {
+        this.jiraService = new MCPJiraService();
+        await this.jiraService.initialize(context.atlassianTokens);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    return this.jiraService;
+  }
+
   async processRequest(context: AskServiceContext): Promise<AskResponse> {
     const { request } = context;
 
-    // Interactive mode - requires session management
     if (request.interactive && request.session_id) {
       return this.handleInteractiveTurn(context);
     }
 
-    // Interactive mode - start new session
     if (request.interactive) {
       return this.startInteractiveSession(context);
     }
 
-    // Confirmation required
     if (request.confirm) {
       return this.handleConfirmationRequest(context);
     }
 
-    // Normal one-shot request
     return this.handleOneShotRequest(context);
   }
 
@@ -54,31 +145,56 @@ export class AskService {
         };
       }
 
+      const [projects] = await Promise.all([this.fetchUserProjects(context)]);
+
       const userInfo = {
         name: context.atlassianTokens.user.name,
         email: context.atlassianTokens.user.email,
         accountId: context.accountId,
+        projects,
       };
 
-      const response = await createChatCompletion({
-        messages: [
-          {
-            role: "system",
-            content: getSystemPrompt(userInfo),
-          },
-          {
-            role: "user",
-            content: context.request.prompt,
-          },
-        ],
-      });
+      const jiraService = await this.getJiraService(context);
+      const mcpTools = jiraService ? await jiraService.getTools() : [];
+      const tools =
+        mcpTools.length > 0 ? convertMCPToolsToOpenAI(mcpTools) : undefined;
+
+      const messages: ChatMessage[] = [
+        {
+          role: "system",
+          content: getSystemPrompt(
+            userInfo,
+            mcpTools.map((t) => {
+              const tool: { name: string; description?: string } = {
+                name: t.name,
+              };
+              if (t.description) {
+                tool.description = t.description;
+              }
+              return tool;
+            })
+          ),
+        },
+        {
+          role: "user",
+          content: context.request.prompt,
+        },
+      ];
+
+      const result = await this.processWithTools(
+        messages,
+        tools,
+        jiraService,
+        false
+      );
 
       return {
         status: "completed",
-        message: response,
+        message: result.message,
         data: {
           prompt: context.request.prompt,
-          response: response,
+          response: result.message,
+          toolCalls: result.toolCalls,
         },
       };
     } catch (error) {
@@ -95,10 +211,8 @@ export class AskService {
   private async handleConfirmationRequest(
     context: AskServiceContext
   ): Promise<AskResponse> {
-    // Generate confirmation token and return pending status
     const confirmationToken = this.generateConfirmationToken();
 
-    // Store pending action in database
     storePendingConfirmation(confirmationToken, context.accountId, context);
 
     return {
@@ -118,10 +232,8 @@ export class AskService {
   ): Promise<AskResponse> {
     const sessionId = this.generateSessionId();
 
-    // Store session in database
     dbStoreInteractiveSession(sessionId, context.accountId, context, []);
 
-    // Process first turn with empty history
     const response = await this.processInteractiveTurn(sessionId, context, []);
 
     return {
@@ -143,7 +255,6 @@ export class AskService {
       };
     }
 
-    // Get conversation history from database
     const session = dbGetInteractiveSession(context.request.session_id);
     if (!session) {
       return {
@@ -152,7 +263,6 @@ export class AskService {
       };
     }
 
-    // Verify session belongs to the same account
     if (session.account_id !== context.accountId) {
       return {
         status: "error",
@@ -179,7 +289,7 @@ export class AskService {
     sessionId: string,
     context: AskServiceContext,
     history: Array<{ role: string; content: string }>
-  ): Promise<{ message: string; data?: unknown }> {
+  ): Promise<{ message: string; data?: unknown; toolCalls?: unknown }> {
     try {
       if (!isOpenAIConfigured()) {
         return {
@@ -191,47 +301,67 @@ export class AskService {
         };
       }
 
+      const [projects] = await Promise.all([this.fetchUserProjects(context)]);
+
       const userInfo = {
         name: context.atlassianTokens.user.name,
         email: context.atlassianTokens.user.email,
         accountId: context.accountId,
+        projects,
       };
 
-      // Build messages array with system prompt, history, and current prompt
-      const messages = [
+      const jiraService = await this.getJiraService(context);
+      const mcpTools = jiraService ? await jiraService.getTools() : [];
+      const tools =
+        mcpTools.length > 0 ? convertMCPToolsToOpenAI(mcpTools) : undefined;
+
+      const messages: ChatMessage[] = [
         {
-          role: "system" as const,
-          content: getInteractivePrompt(userInfo),
+          role: "system",
+          content: getInteractivePrompt(
+            userInfo,
+            mcpTools.map((t) => {
+              const tool: { name: string; description?: string } = {
+                name: t.name,
+              };
+              if (t.description) {
+                tool.description = t.description;
+              }
+              return tool;
+            })
+          ),
         },
-        // Add conversation history
         ...history.map((msg) => ({
           role: msg.role as "user" | "assistant",
           content: msg.content,
         })),
-        // Add current user message
         {
-          role: "user" as const,
+          role: "user",
           content: context.request.prompt,
         },
       ];
 
-      const aiResponse = await createChatCompletion({
+      const result = await this.processWithTools(
         messages,
-      });
+        tools,
+        jiraService,
+        true,
+        5
+      );
 
-      // Update session history in database
       const updatedHistory = [
         ...history,
         { role: "user", content: context.request.prompt },
-        { role: "assistant", content: aiResponse },
+        { role: "assistant", content: result.message },
       ];
       updateInteractiveSessionHistory(sessionId, updatedHistory);
 
       return {
-        message: aiResponse,
+        message: result.message,
         data: {
           prompt: context.request.prompt,
         },
+        toolCalls: result.toolCalls,
       };
     } catch (error) {
       const errorMessage =
@@ -246,6 +376,154 @@ export class AskService {
     }
   }
 
+  private async processWithTools(
+    messages: ChatMessage[],
+    tools:
+      | Array<{
+          type: "function";
+          function: {
+            name: string;
+            description?: string;
+            parameters?: Record<string, unknown>;
+          };
+        }>
+      | undefined,
+    jiraService: MCPJiraService | null,
+    isInteractive: boolean,
+    maxIterations = 5
+  ): Promise<{ message: string; toolCalls: unknown[] }> {
+    let currentMessages = [...messages];
+    let iteration = 0;
+    const allToolCalls: Array<{
+      name: string;
+      arguments: Record<string, unknown>;
+      result: unknown;
+    }> = [];
+
+    while (iteration < maxIterations) {
+      const completionOptions: {
+        messages: ChatMessage[];
+        tools?: Array<{
+          type: "function";
+          function: {
+            name: string;
+            description?: string;
+            parameters?: Record<string, unknown>;
+          };
+        }>;
+      } = {
+        messages: currentMessages,
+      };
+
+      if (tools) {
+        completionOptions.tools = tools;
+        console.log(
+          `[DEBUG] Passing ${tools.length} tools to OpenAI:`,
+          tools.map((t) => t.function.name)
+        );
+      }
+
+      const result = await createChatCompletion(completionOptions);
+
+      if (result.toolCalls.length > 0) {
+        console.log(
+          `[DEBUG] OpenAI requested ${result.toolCalls.length} tool calls:`,
+          result.toolCalls.map((tc) => tc.name)
+        );
+      }
+
+      if (result.content && result.finishReason !== "tool_calls") {
+        return {
+          message: result.content,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : [],
+        };
+      }
+
+      if (result.toolCalls.length > 0 && jiraService) {
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: result.content || "",
+          tool_calls: result.toolCalls.map((tc) => ({
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+          })),
+        };
+        currentMessages.push(assistantMessage);
+
+        for (const toolCall of result.toolCalls) {
+          try {
+            console.log(
+              `[DEBUG] Executing tool: ${toolCall.name} with args:`,
+              JSON.stringify(toolCall.arguments, null, 2)
+            );
+            const toolResult = await jiraService.callTool(
+              toolCall.name,
+              toolCall.arguments
+            );
+            console.log(
+              `[DEBUG] Tool ${toolCall.name} result (isError: ${toolResult.isError}):`,
+              toolResult.content.slice(0, 200)
+            );
+
+            const resultContent = toolResult.content
+              .map((item) => {
+                if (item.text) return item.text;
+                if (item.data) return JSON.stringify(item.data);
+                return "";
+              })
+              .join("\n");
+
+            allToolCalls.push({
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              result: toolResult.isError
+                ? { error: resultContent }
+                : resultContent,
+            });
+
+            currentMessages.push({
+              role: "tool",
+              content: toolResult.isError
+                ? `Error: ${resultContent}`
+                : resultContent,
+              tool_call_id: toolCall.id,
+            });
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : "Unknown error";
+            allToolCalls.push({
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              result: { error: errorMessage },
+            });
+
+            currentMessages.push({
+              role: "tool",
+              content: `Error executing ${toolCall.name}: ${errorMessage}`,
+              tool_call_id: toolCall.id,
+            });
+          }
+        }
+
+        iteration++;
+        continue;
+      }
+
+      return {
+        message:
+          "I'm having trouble processing your request. Could you please rephrase it?",
+        toolCalls: allToolCalls,
+      };
+    }
+
+    return {
+      message:
+        "I've reached the maximum number of tool calls. Here's what I was able to accomplish so far.",
+      toolCalls: allToolCalls,
+    };
+  }
+
   async processConfirmation(
     context: AskServiceContext & { approved: boolean }
   ): Promise<AskResponse> {
@@ -256,7 +534,6 @@ export class AskService {
       };
     }
 
-    // Retrieve pending action from database
     const pending = getPendingConfirmation(context.request.confirmation_token);
 
     if (!pending) {
@@ -266,7 +543,6 @@ export class AskService {
       };
     }
 
-    // Verify it belongs to the same account
     if (pending.account_id !== context.accountId) {
       return {
         status: "error",
@@ -277,7 +553,6 @@ export class AskService {
     const pendingAction = pending.context;
 
     if (!context.approved) {
-      // Clean up pending action from database
       deletePendingConfirmation(context.request.confirmation_token);
 
       return {
@@ -286,10 +561,8 @@ export class AskService {
       };
     }
 
-    // Execute the action
     const result = await this.executeAction(pendingAction);
 
-    // Clean up pending action from database
     deletePendingConfirmation(context.request.confirmation_token);
 
     return {
@@ -302,13 +575,72 @@ export class AskService {
   private async executeAction(
     context: AskServiceContext
   ): Promise<Record<string, unknown>> {
-    // TODO: Integrate with AI agent + MCP tools to execute the actual action
-    // This will be dynamically determined by the AI agent based on available tools
-    return {
-      executed: true,
-      timestamp: Date.now(),
-      prompt: context.request.prompt,
+    const jiraService = await this.getJiraService(context);
+
+    if (!jiraService) {
+      return {
+        executed: false,
+        error: "MCP Jira service not available",
+        timestamp: Date.now(),
+        prompt: context.request.prompt,
+      };
+    }
+
+    const userInfo = {
+      name: context.atlassianTokens.user.name,
+      email: context.atlassianTokens.user.email,
+      accountId: context.accountId,
     };
+
+    const mcpTools = await jiraService.getTools();
+    const tools = convertMCPToolsToOpenAI(mcpTools);
+
+    const messages: ChatMessage[] = [
+      {
+        role: "system",
+        content: getSystemPrompt(
+          userInfo,
+          mcpTools.map((t) => {
+            const tool: { name: string; description?: string } = {
+              name: t.name,
+            };
+            if (t.description) {
+              tool.description = t.description;
+            }
+            return tool;
+          })
+        ),
+      },
+      {
+        role: "user",
+        content: `Execute this action: ${context.request.prompt}`,
+      },
+    ];
+
+    try {
+      const result = await this.processWithTools(
+        messages,
+        tools,
+        jiraService,
+        false,
+        10
+      );
+
+      return {
+        executed: true,
+        timestamp: Date.now(),
+        prompt: context.request.prompt,
+        result: result.message,
+        toolCalls: result.toolCalls,
+      };
+    } catch (error) {
+      return {
+        executed: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: Date.now(),
+        prompt: context.request.prompt,
+      };
+    }
   }
 
   private generateConfirmationToken(): string {

@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { cliAuthMiddleware } from "../middleware/cli-auth.js";
+import { authMiddleware } from "../middleware/auth.js";
 
 const userRouter = new Hono();
 
-userRouter.get("/me", cliAuthMiddleware(), (c) => {
+userRouter.get("/me", authMiddleware(), (c) => {
   const tokens = c.get("atlassian_tokens");
   const accountId = c.get("account_id");
 
