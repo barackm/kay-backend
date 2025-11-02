@@ -26,19 +26,19 @@ askRouter.post("/ask", authMiddleware(), async (c) => {
 
     const accountId = c.get("account_id");
     const atlassianTokens = c.get("atlassian_tokens");
+    const jiraProjects = c.get("jira_projects") || [];
 
     const response = await askService.processRequest({
       accountId,
       atlassianTokens,
       request: body,
+      jiraProjects,
     });
 
     return c.json<AskResponse>(response);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
-
-    console.error("Ask request error:", errorMessage);
 
     return c.json<AskResponse>(
       {
@@ -73,7 +73,7 @@ askRouter.post("/ask/confirm", authMiddleware(), async (c) => {
       atlassianTokens,
       request: {
         confirmation_token: body.confirmation_token,
-        prompt: "", // Not needed for confirmation
+        prompt: "",
       },
       approved: body.approved,
     });
@@ -82,8 +82,6 @@ askRouter.post("/ask/confirm", authMiddleware(), async (c) => {
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
-
-    console.error("Confirmation error:", errorMessage);
 
     return c.json<AskResponse>(
       {

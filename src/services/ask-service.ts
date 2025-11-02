@@ -9,6 +9,7 @@ import { getSystemPrompt, getInteractivePrompt } from "./prompt-service.js";
 import { MCPJiraService } from "./mcp-jira-service.js";
 import { convertMCPToolsToOpenAI } from "../utils/mcp-tools.js";
 import { ENV } from "../config/env.js";
+import { refreshAccessTokenIfNeeded } from "./token-service.js";
 import {
   storeInteractiveSession as dbStoreInteractiveSession,
   getInteractiveSession as dbGetInteractiveSession,
@@ -25,6 +26,7 @@ export interface AskServiceContext {
   accountId: string;
   atlassianTokens: StoredToken;
   request: AskRequest;
+  jiraProjects?: Array<{ key: string; name: string }>;
 }
 
 export class AskService {
@@ -41,33 +43,11 @@ export class AskService {
       return [];
     }
 
-    let accessToken = context.atlassianTokens.access_token;
-
-    if (Date.now() >= context.atlassianTokens.expires_at) {
-      try {
-        const { getUserTokens } = await import("./db-store.js");
-        const { ENV } = await import("../config/env.js");
-
-        const response = await fetch("https://auth.atlassian.com/oauth/token", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            grant_type: "refresh_token",
-            client_id: ENV.ATLASSIAN_CLIENT_ID,
-            client_secret: ENV.ATLASSIAN_CLIENT_SECRET,
-            refresh_token: context.atlassianTokens.refresh_token,
-          }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          accessToken = data.access_token;
-        }
-      } catch (error) {
-        return [];
-      }
+    let accessToken: string;
+    try {
+      accessToken = await refreshAccessTokenIfNeeded(context.atlassianTokens);
+    } catch (error) {
+      return [];
     }
 
     try {
@@ -82,16 +62,23 @@ export class AskService {
       );
 
       if (!response.ok) {
+        const errorText = await response.text();
         return [];
       }
 
       const data = await response.json();
-      return (data.values || []).map(
+
+      if (!data.values || !Array.isArray(data.values)) {
+        return [];
+      }
+
+      const projects = data.values.map(
         (project: { key: string; name: string }) => ({
           key: project.key,
           name: project.name,
         })
       );
+      return projects;
     } catch (error) {
       return [];
     }
@@ -145,7 +132,7 @@ export class AskService {
         };
       }
 
-      const [projects] = await Promise.all([this.fetchUserProjects(context)]);
+      const projects = context.jiraProjects || [];
 
       const userInfo = {
         name: context.atlassianTokens.user.name,
@@ -301,7 +288,7 @@ export class AskService {
         };
       }
 
-      const [projects] = await Promise.all([this.fetchUserProjects(context)]);
+      const projects = context.jiraProjects || [];
 
       const userInfo = {
         name: context.atlassianTokens.user.name,

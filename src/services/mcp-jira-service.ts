@@ -1,6 +1,7 @@
 import { MCPClient, type MCPTool } from "./mcp-client.js";
 import { ENV } from "../config/env.js";
 import type { StoredToken } from "../types/oauth.js";
+import { refreshAccessTokenIfNeeded } from "./token-service.js";
 
 export interface JiraMCPConfig {
   jiraUrl: string;
@@ -36,19 +37,7 @@ export class MCPJiraService {
     tokens: StoredToken,
     jiraResource: { id: string; url: string }
   ): Promise<void> {
-    let accessToken = tokens.access_token;
-
-    if (Date.now() >= tokens.expires_at) {
-      try {
-        accessToken = await this.refreshAccessToken(tokens);
-      } catch (error) {
-        throw new Error(
-          `Failed to refresh expired token: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`
-        );
-      }
-    }
+    const accessToken = await refreshAccessTokenIfNeeded(tokens);
 
     const env: Record<string, string> = {
       JIRA_URL: jiraResource.url,
@@ -56,8 +45,6 @@ export class MCPJiraService {
       ATLASSIAN_OAUTH_ACCESS_TOKEN: accessToken,
       MCP_VERY_VERBOSE: "true",
       MCP_LOGGING_STDOUT: "true",
-      ENABLED_TOOLS:
-        "jira_search,jira_get_issue,jira_create_issue,jira_update_issue,jira_transition_issue,jira_add_comment",
     };
 
     const baseArgs = [...ENV.MCP_JIRA_ARGS];
@@ -78,47 +65,6 @@ export class MCPJiraService {
     } catch (error) {
       throw error;
     }
-  }
-
-  private async refreshAccessToken(tokens: StoredToken): Promise<string> {
-    const { ENV } = await import("../config/env.js");
-    const { getUserTokens, storeUserTokens } = await import("./db-store.js");
-
-    const response = await fetch("https://auth.atlassian.com/oauth/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        client_id: ENV.ATLASSIAN_CLIENT_ID,
-        client_secret: ENV.ATLASSIAN_CLIENT_SECRET,
-        refresh_token: tokens.refresh_token,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Failed to refresh access token: ${response.status} ${response.statusText} - ${errorText}`
-      );
-    }
-
-    const data = await response.json();
-    const newTokens = getUserTokens(tokens.account_id);
-
-    if (newTokens) {
-      storeUserTokens(
-        tokens.account_id,
-        data.access_token,
-        data.refresh_token || tokens.refresh_token,
-        data.expires_in,
-        newTokens.user,
-        newTokens.resources
-      );
-    }
-
-    return data.access_token;
   }
 
   async getTools(forceRefresh = false): Promise<MCPTool[]> {
@@ -146,13 +92,30 @@ export class MCPJiraService {
       cachedTime &&
       Date.now() - cachedTime.getTime() < this.TOOLS_CACHE_TTL_MS
     ) {
-      return this.client.getTools();
+      return this.filterTools(this.client.getTools());
     }
 
     const tools = await this.client.discoverTools();
     this.toolsCache.set(cacheKey, new Date());
 
-    return tools;
+    return this.filterTools(tools);
+  }
+
+  private filterTools(tools: MCPTool[]): MCPTool[] {
+    const defaultDisabled = new Set<string>([
+      "jira_delete_issue",
+      "confluence_delete_page",
+    ]);
+
+    const disabledTools = new Set<string>(defaultDisabled);
+
+    if (ENV.MCP_JIRA_DISABLED_TOOLS && ENV.MCP_JIRA_DISABLED_TOOLS.length > 0) {
+      for (const tool of ENV.MCP_JIRA_DISABLED_TOOLS) {
+        disabledTools.add(tool);
+      }
+    }
+
+    return tools.filter((tool) => !disabledTools.has(tool.name));
   }
 
   async getConnectionStatus(): Promise<{

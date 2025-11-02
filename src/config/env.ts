@@ -21,4 +21,7 @@ export const ENV = {
   MCP_JIRA_ARGS: process.env.MCP_JIRA_ARGS
     ? process.env.MCP_JIRA_ARGS.split(",")
     : ["run", "--rm", "-i", "ghcr.io/sooperset/mcp-atlassian:latest"],
+  MCP_JIRA_DISABLED_TOOLS: process.env.MCP_JIRA_DISABLED_TOOLS
+    ? process.env.MCP_JIRA_DISABLED_TOOLS.split(",").map((t) => t.trim())
+    : undefined,
 };

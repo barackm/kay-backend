@@ -7,5 +7,6 @@ declare module "hono" {
     account_id: string;
     atlassian_tokens: StoredToken;
     session_token: string;
+    jira_projects?: Array<{ key: string; name: string }>;
   }
 }

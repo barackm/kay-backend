@@ -109,7 +109,7 @@ export function getInteractivePrompt(
       const projectsList = userInfo.projects
         .map((p) => `- **${p.key}**: ${p.name}`)
         .join("\n");
-      userContext.push(`User's accessible Jira projects:\n${projectsList}`);
+      userContext.push(`User's accessible Jira spaces:\n${projectsList}`);
     }
 
     if (userContext.length > 0) {
