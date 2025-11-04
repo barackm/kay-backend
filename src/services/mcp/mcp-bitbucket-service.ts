@@ -13,15 +13,37 @@ export class MCPBitbucketService {
       throw new Error("No Bitbucket connection found for this session");
     }
 
-    const accessToken = connection.access_token;
-    const username =
-      (connection.metadata.username as string | undefined) ||
-      (connection.metadata as { nickname?: string }).nickname ||
-      undefined;
+    const basicAuth = connection.access_token;
+    const email = connection.metadata.email as string | undefined;
+    const username = connection.metadata.username as string | undefined;
+
+    let apiToken: string | undefined;
+    if (basicAuth) {
+      try {
+        const decoded = Buffer.from(basicAuth, "base64").toString("utf-8");
+        const [storedEmail, token] = decoded.split(":");
+        if (token) {
+          apiToken = token;
+        }
+      } catch (error) {
+        console.error(
+          "[MCPBitbucketService] Failed to decode credentials:",
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+
+    const finalUsername = email || username || "";
+
+    if (!finalUsername || !apiToken) {
+      throw new Error(
+        "Bitbucket credentials are incomplete. Email and API token are required."
+      );
+    }
 
     const env: Record<string, string> = {
-      BITBUCKET_ACCESS_TOKEN: accessToken,
-      BITBUCKET_USERNAME: username || "",
+      BITBUCKET_USERNAME: finalUsername,
+      BITBUCKET_ACCESS_TOKEN: apiToken,
       BITBUCKET_API_BASE: "https://api.bitbucket.org/2.0",
       MCP_LOGGING_STDOUT: "true",
     };

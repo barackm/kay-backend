@@ -54,7 +54,7 @@ healthRouter.get("/", sessionAuthMiddleware(), async (c) => {
   if (statuses.includes("unhealthy")) health.status = "degraded";
   if (hasCriticalFailure) health.status = "unhealthy";
 
-  const statusCode = health.status === "healthy" ? 200 : 503;
+  const statusCode = health.status === "unhealthy" ? 503 : 200;
   return c.json(health, statusCode);
 });
 

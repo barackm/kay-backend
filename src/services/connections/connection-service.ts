@@ -94,7 +94,7 @@ export function getKaySessionIdByToken(
   _sessionToken: string
 ): string | undefined {
   // No reliable mapping by token; require session_id to be provided by caller
-    return undefined;
+  return undefined;
 }
 
 export function updateKaySessionAccountId(
@@ -267,6 +267,7 @@ export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
       const user: ServiceConnectionInfo["user"] = {};
       if (metadata.account_id) user.account_id = metadata.account_id as string;
       if (metadata.username) user.username = metadata.username as string;
+      if (metadata.email) user.email = metadata.email as string;
       if (metadata.display_name) {
         user.display_name = metadata.display_name as string;
         user.name = metadata.display_name as string;
@@ -366,14 +367,14 @@ export async function connectAtlassianService(
   const accountId = user.account_id;
 
   try {
-  storeUserTokens(
-    accountId,
-    tokens.access_token,
-    tokens.refresh_token,
-    tokens.expires_in,
-    user,
-    resources
-  );
+    storeUserTokens(
+      accountId,
+      tokens.access_token,
+      tokens.refresh_token,
+      tokens.expires_in,
+      user,
+      resources
+    );
   } catch (error) {
     if (hasExistingConnections) {
       console.log(
@@ -454,10 +455,89 @@ export function getAtlassianTokensFromConnection(
   return getUserTokens(accountId);
 }
 
+async function verifyBitbucketCredentials(
+  email: string,
+  apiToken: string
+): Promise<{
+  uuid: string;
+  username: string;
+  display_name: string;
+  avatar_url?: string;
+  email: string;
+}> {
+  if (!email || !apiToken) {
+    throw new Error("Email and API token are required");
+  }
+
+  if (!email.includes("@")) {
+    throw new Error(
+      "Please use your Atlassian account email address (not Bitbucket username). Example: your.email@example.com"
+    );
+  }
+
+  const credentials = Buffer.from(`${email}:${apiToken}`).toString("base64");
+
+  console.log(
+    "[verifyBitbucketCredentials] Attempting to authenticate with email:",
+    email
+  );
+
+  const response = await fetch("https://api.bitbucket.org/2.0/user", {
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage = `Failed to verify Bitbucket credentials: ${response.status} ${response.statusText}`;
+
+    if (response.status === 401) {
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.error?.message) {
+          errorMessage += ` - ${errorData.error.message}`;
+        }
+      } catch {
+        errorMessage += ` - ${errorText}`;
+      }
+
+      errorMessage +=
+        "\n\nTroubleshooting tips:\n" +
+        "1. Make sure you're using an API Token (not an App Password - App Passwords are deprecated)\n" +
+        "2. Verify the token was created with proper scopes (at least 'Account: Read' and 'Repositories: Read')\n" +
+        "3. Ensure you're using your Atlassian account email address (the one you use to log in to Bitbucket)\n" +
+        "4. Check that the token hasn't expired or been revoked\n" +
+        "5. Generate a new API token from: https://bitbucket.org/account/settings/app-passwords/\n" +
+        "   (Note: Bitbucket is transitioning to API tokens, so make sure you're creating an API token, not an app password)";
+    } else {
+      errorMessage += ` - ${errorText}`;
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  const user = await response.json();
+
+  console.log(
+    "[verifyBitbucketCredentials] Successfully authenticated user:",
+    user.username || user.display_name
+  );
+
+  return {
+    uuid: user.uuid,
+    username: user.username || user.nickname || email,
+    display_name: user.display_name || user.username || email,
+    avatar_url: user.links?.avatar?.href,
+    email: email,
+  };
+}
+
 export async function connectBitbucketService(
   kaySessionId: string,
-  code: string,
-  callbackUrl: string
+  email: string,
+  apiToken: string
 ): Promise<{
   connection: Connection;
   accountId: string;
@@ -474,71 +554,73 @@ export async function connectBitbucketService(
     );
   }
 
-  let tokens, user;
+  let user;
   try {
-    const result = await handleBitbucketCallback(code, callbackUrl);
-    tokens = result.tokens;
-    user = result.user;
+    console.log(
+      "[connectBitbucketService] Verifying Bitbucket credentials for email:",
+      email
+    );
+    user = await verifyBitbucketCredentials(email, apiToken);
+    console.log(
+      "[connectBitbucketService] Credentials verified successfully for user:",
+      user.username
+    );
   } catch (error) {
+    console.error(
+      "[connectBitbucketService] Credential verification failed:",
+      error instanceof Error ? error.message : error
+    );
     if (existingConnection) {
       console.log(
-        "[connectBitbucketService] Bitbucket OAuth callback failed, deleting existing connection"
+        "[connectBitbucketService] Bitbucket credential verification failed, deleting existing connection"
       );
       deleteConnection(kaySessionId, "bitbucket");
     }
     throw error;
   }
 
-  if (!tokens.refresh_token) {
-    if (existingConnection) {
-      console.log(
-        "[connectBitbucketService] No refresh token received, deleting existing connection"
-      );
-      deleteConnection(kaySessionId, "bitbucket");
-    }
-    throw new Error("No refresh token received from Bitbucket");
-  }
-
   console.log(
-    "[connectBitbucketService] Bitbucket user payload:",
+    "[connectBitbucketService] Bitbucket user verified:",
     JSON.stringify({
       uuid: user.uuid,
-      username: (user as unknown as { username?: string; nickname?: string })
-        .username,
-      nickname: (user as unknown as { nickname?: string }).nickname,
+      username: user.username,
       display_name: user.display_name,
-      avatar: user.links?.avatar?.href,
+      email: user.email,
+      avatar_url: user.avatar_url,
     })
   );
-  console.log("[connectBitbucketService] Bitbucket token info:", {
-    has_refresh_token: Boolean(tokens.refresh_token),
-    expires_in: tokens.expires_in,
-    scopes: tokens.scopes,
-  });
 
   const accountId = `bitbucket_${user.uuid}`;
 
-  const nickname = (user as unknown as { nickname?: string }).nickname;
+  const credentials = Buffer.from(`${email}:${apiToken}`).toString("base64");
+
   const metadata: ConnectionMetadata = {
     account_id: accountId,
     uuid: user.uuid,
-    username: user.username || nickname || undefined,
+    username: user.username,
     display_name: user.display_name,
-    avatar_url: user.links?.avatar?.href,
+    avatar_url: user.avatar_url,
+    email: user.email,
     user_data: user,
   };
 
-  const expiresAt = tokens.expires_in
-    ? Date.now() + tokens.expires_in * 1000
-    : undefined;
+  console.log(
+    "[connectBitbucketService] Storing Bitbucket connection with account_id:",
+    accountId
+  );
 
   const connection = storeConnection(
     kaySessionId,
     "bitbucket",
-    tokens.access_token,
-    tokens.refresh_token,
-    expiresAt,
+    credentials,
+    undefined,
+    undefined,
     metadata
+  );
+
+  console.log(
+    "[connectBitbucketService] Bitbucket connection stored successfully:",
+    connection.id
   );
 
   return {

@@ -9,10 +9,7 @@ import {
   getStateKaySessionId,
   getStateServiceName,
 } from "../services/connections/state-store.js";
-import {
-  connectAtlassianService,
-  connectBitbucketService,
-} from "../services/connections/connection-service.js";
+import { connectAtlassianService } from "../services/connections/connection-service.js";
 import type { ServiceName } from "../types/connections.js";
 import {
   getOAuthProvider,
@@ -109,28 +106,14 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
         break;
 
       case "bitbucket":
-        if (serviceName !== "bitbucket") {
-          return c.json(
-            { error: `Service ${serviceName} is not a Bitbucket service` },
-            400
-          );
-        }
-
-        const callbackUrl = `${ENV.BITBUCKET_CALLBACK_URL}?service=${serviceName}`;
-        console.log(
-          "[OAuth Callback] Calling connectBitbucketService with kay_session_id:",
-          storedKaySessionId
+        return c.json(
+          {
+            error: "Bitbucket no longer uses OAuth",
+            message:
+              "Bitbucket now uses email and API token authentication. Please use the /connect endpoint with email and api_token.",
+          },
+          400
         );
-
-        const bitbucketResult = await connectBitbucketService(
-          storedKaySessionId,
-          code,
-          callbackUrl
-        );
-
-        accountId = bitbucketResult.accountId;
-        completeState(state, bitbucketResult.accountId);
-        break;
 
       default:
         return c.json(

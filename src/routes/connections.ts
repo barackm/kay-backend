@@ -6,6 +6,7 @@ import {
   getConnectionStatus,
   deleteConnection,
   connectKygService,
+  connectBitbucketService,
 } from "../services/connections/connection-service.js";
 import type { ServiceName } from "../types/connections.js";
 import {
@@ -59,6 +60,7 @@ connectionsRouter.post("/connect", async (c) => {
     session_id?: string;
     email?: string;
     password?: string;
+    api_token?: string;
   };
   const serviceName = c.req.query("service") as ServiceName | undefined;
 
@@ -97,6 +99,9 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const config = getServiceConfig(serviceName);
+  console.log(
+    `[Connect] Service: ${serviceName}, requiresOAuth: ${config.requiresOAuth}, oauthProvider: ${config.oauthProvider}`
+  );
 
   if (!config.requiresOAuth) {
     if (serviceName === "kyg") {
@@ -148,6 +153,55 @@ connectionsRouter.post("/connect", async (c) => {
       }
     }
 
+    if (serviceName === "bitbucket") {
+      if (!body.email || !body.api_token) {
+        return c.json(
+          {
+            error: "Missing required fields for Bitbucket",
+            message:
+              "Bitbucket requires email and api_token in the request body",
+          },
+          400
+        );
+      }
+
+      try {
+        const result = await connectBitbucketService(
+          kaySessionId,
+          body.email,
+          body.api_token
+        );
+
+        const response: {
+          service: string;
+          session_id: string;
+          message: string;
+          session_reset?: boolean;
+          connected: boolean;
+          account_id?: string;
+        } = {
+          service: serviceName,
+          session_id: kaySessionId,
+          connected: true,
+          account_id: result.accountId,
+          message: `Successfully connected to ${serviceName}`,
+        };
+
+        if (sessionCreated) {
+          response.session_reset = true;
+        }
+
+        return c.json(response);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        return c.json(
+          { error: `Failed to connect to Bitbucket: ${errorMessage}` },
+          500
+        );
+      }
+    }
+
     return c.json(
       { error: `Service ${serviceName} does not require OAuth connection` },
       400
@@ -155,6 +209,8 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const oauthProvider = getOAuthProvider(serviceName);
+  console.log(`[Connect] OAuth provider for ${serviceName}: ${oauthProvider}`);
+
   if (!oauthProvider) {
     return c.json(
       { error: `Service ${serviceName} does not support OAuth` },
@@ -163,10 +219,18 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const state = generateOAuthState();
+  console.log(`[Connect] Generated OAuth state: ${state.substring(0, 8)}...`);
   storeState(state, kaySessionId, serviceName);
 
   try {
+    console.log(`[Connect] Building authorization URL for ${serviceName}...`);
     const authorizationUrl = buildServiceAuthorizationUrl(serviceName, state);
+    console.log(
+      `[Connect] Authorization URL generated: ${authorizationUrl.substring(
+        0,
+        50
+      )}...`
+    );
 
     const response: {
       service: string;
@@ -188,10 +252,23 @@ connectionsRouter.post("/connect", async (c) => {
       response.message = `New session created. Please visit the authorization URL to connect ${serviceName}`;
     }
 
+    console.log(
+      `[Connect] Returning OAuth response for ${serviceName}:`,
+      JSON.stringify({
+        ...response,
+        authorization_url: `${response.authorization_url.substring(0, 50)}...`,
+      })
+    );
     return c.json(response);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
+
+    console.error(
+      `[Connect] Error initiating OAuth flow for ${serviceName}:`,
+      errorMessage,
+      error instanceof Error ? error.stack : ""
+    );
 
     if (errorMessage.includes("not yet implemented")) {
       return c.json({ error: errorMessage }, 501);

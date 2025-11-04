@@ -21,8 +21,8 @@ const SERVICE_REGISTRY: Record<ServiceName, ServiceConfig> = {
   },
   bitbucket: {
     name: "bitbucket",
-    oauthProvider: "bitbucket",
-    requiresOAuth: true,
+    oauthProvider: null,
+    requiresOAuth: false,
   },
   kyg: {
     name: "kyg",
