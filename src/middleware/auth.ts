@@ -1,15 +1,13 @@
 import type { Context, Next } from "hono";
 import { verifyCliSessionToken } from "../services/auth/auth.js";
-import {
-  getCliSessionByToken,
-  getUserTokens,
-} from "../services/database/db-store.js";
+import { getCliSessionByToken } from "../services/database/db-store.js";
 import {
   getTokensForSession,
   refreshAccessTokenIfNeeded,
 } from "../services/auth/token-service.js";
 import type { UserContext } from "../types/auth.js";
 import type { StoredToken } from "../types/oauth.js";
+import { getKaySessionIdByToken } from "../services/connections/connection-service.js";
 
 const SPACES_CACHE_TTL_MS = 5 * 60 * 1000;
 const spacesCache = new Map<
@@ -123,7 +121,14 @@ export function authMiddleware() {
     const authHeader = c.req.header("Authorization");
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return c.json({ error: "Unauthorized: Missing or invalid token" }, 401);
+      return c.json<ErrorResponse>(
+        {
+          error: ErrorCode.TOKEN_MISSING,
+          code: ErrorCode.TOKEN_MISSING,
+          message: "No Authorization header or invalid format",
+        },
+        401
+      );
     }
 
     const sessionToken = authHeader.substring(7);
@@ -134,26 +139,42 @@ export function authMiddleware() {
       const session = getCliSessionByToken(sessionToken);
 
       if (!session) {
-        return c.json(
-          { error: "Unauthorized: Session not found or expired" },
-          401
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_INVALID,
+            code: ErrorCode.TOKEN_INVALID,
+            message: "Token revoked or not found",
+          },
+          403
         );
       }
 
       if (Date.now() > session.expires_at) {
-        return c.json({ error: "Unauthorized: Session expired" }, 401);
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_EXPIRED,
+            code: ErrorCode.TOKEN_EXPIRED,
+            message: "Token valid but expired",
+          },
+          401
+        );
       }
 
       const userTokens = getTokensForSession(sessionToken);
 
       if (!userTokens) {
-        return c.json(
-          { error: "Unauthorized: No tokens found for account" },
-          401
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_INVALID,
+            code: ErrorCode.TOKEN_INVALID,
+            message: "No tokens found for account",
+          },
+          403
         );
       }
 
-      const cacheKey = `spaces:${session.account_id}`;
+      const kaySessionId = getKaySessionIdByToken(sessionToken);
+      const cacheKey = `spaces:${kaySessionId || "unknown"}`;
       const cached = spacesCache.get(cacheKey);
 
       let jiraProjects: Array<{ key: string; name: string }>;
@@ -183,7 +204,7 @@ export function authMiddleware() {
       );
 
       const userContext: UserContext = {
-        accountId: session.account_id,
+        accountId: kaySessionId || "",
         displayName: userTokens.user.name,
         email: userTokens.user.email,
         baseUrl: jiraResource?.url || "",
@@ -193,7 +214,9 @@ export function authMiddleware() {
       };
 
       c.set("user", userContext);
-      c.set("account_id", session.account_id);
+      if (kaySessionId) {
+        c.set("session_id", kaySessionId);
+      }
       c.set("atlassian_tokens", userTokens);
       c.set("session_token", sessionToken);
       c.set("jira_projects", jiraProjects);
@@ -201,7 +224,36 @@ export function authMiddleware() {
 
       await next();
     } catch (error) {
-      return c.json({ error: "Unauthorized: Invalid or expired token" }, 401);
+      if (error instanceof Error && error.name === "TokenExpiredError") {
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_EXPIRED,
+            code: ErrorCode.TOKEN_EXPIRED,
+            message: "Token valid but expired",
+          },
+          401
+        );
+      }
+
+      if (error instanceof Error && error.name === "JsonWebTokenError") {
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_INVALID,
+            code: ErrorCode.TOKEN_INVALID,
+            message: "Token malformed, revoked, or tampered",
+          },
+          403
+        );
+      }
+
+      return c.json<ErrorResponse>(
+        {
+          error: ErrorCode.TOKEN_INVALID,
+          code: ErrorCode.TOKEN_INVALID,
+          message: "Token malformed, revoked, or tampered",
+        },
+        403
+      );
     }
   };
 }

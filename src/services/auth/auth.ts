@@ -17,19 +17,23 @@ export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, ENV.JWT_SECRET) as JwtPayload;
 }
 
-export function generateCliSessionToken(accountId: string): string {
+export function generateCliSessionToken(accountId?: string): string {
   const payload: CliSessionPayload = {
-    account_id: accountId,
+    account_id: accountId || "",
   };
-  return jwt.sign(payload, ENV.JWT_SECRET, {
+  return jwt.sign(payload, ENV.K_SESSION_SECRET, {
     expiresIn: ENV.CLI_SESSION_EXPIRES_IN,
   } as jwt.SignOptions);
 }
 
 export function verifyCliSessionToken(token: string): CliSessionPayload {
-  return jwt.verify(token, ENV.JWT_SECRET) as CliSessionPayload;
+  return jwt.verify(token, ENV.K_SESSION_SECRET) as CliSessionPayload;
 }
 
 export function generateRefreshToken(): string {
   return crypto.randomBytes(32).toString("hex");
+}
+
+export function hashRefreshToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }

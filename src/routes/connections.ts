@@ -1,10 +1,8 @@
 import { Hono } from "hono";
-import { authMiddleware } from "../middleware/auth.js";
+import { sessionAuthMiddleware } from "../middleware/session-auth.js";
 import {
   getKaySessionById,
   createKaySession,
-  getOrCreateKaySessionByToken,
-  getKaySessionIdByToken,
   getConnectionStatus,
   deleteConnection,
   connectKygService,
@@ -19,33 +17,33 @@ import {
   getOAuthProvider,
 } from "../services/connections/service-registry.js";
 import { storeState } from "../services/connections/state-store.js";
-import { ENV } from "../config/env.js";
-import {
-  generateCliSessionToken,
-  generateRefreshToken,
-} from "../services/auth/auth.js";
-import { storeCliSession } from "../services/database/db-store.js";
-import { validateRefreshTokenExpiration } from "../utils/validation.js";
 
 const connectionsRouter = new Hono();
 
-connectionsRouter.get("/", async (c) => {
+connectionsRouter.get("/", sessionAuthMiddleware(), async (c) => {
   const sessionId = c.req.query("session_id") as string | undefined;
 
   if (!sessionId) {
-    return c.json({ error: "Missing required parameter: session_id" }, 400);
+    return c.json(
+      {
+        error: "TOKEN_MISSING",
+        code: "TOKEN_MISSING",
+        message: "Missing required parameter: session_id",
+      },
+      401
+    );
   }
 
   const kaySession = getKaySessionById(sessionId);
   if (!kaySession) {
     return c.json(
       {
-        error: "Invalid session_id",
-        message:
-          "The provided session_id no longer exists. Please reconnect your services.",
+        error: "TOKEN_INVALID",
+        code: "TOKEN_INVALID",
+        message: "Invalid session_id - session not found",
         session_reset_required: true,
       },
-      404
+      401
     );
   }
 
@@ -137,27 +135,6 @@ connectionsRouter.post("/connect", async (c) => {
 
         if (sessionCreated) {
           response.session_reset = true;
-        }
-
-        if (result.isFirstConnection) {
-          const sessionToken = generateCliSessionToken(result.accountId);
-          const refreshToken = generateRefreshToken();
-
-          const refreshExpiresInMs = validateRefreshTokenExpiration(
-            ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
-          );
-
-          storeCliSession(
-            sessionToken,
-            refreshToken,
-            result.accountId,
-            refreshExpiresInMs
-          );
-
-          response.token = sessionToken;
-          response.refresh_token = refreshToken;
-          response.account_id = result.accountId;
-          response.message = `Successfully connected to ${serviceName} and created new session. Use the token for authentication.`;
         }
 
         return c.json(response);

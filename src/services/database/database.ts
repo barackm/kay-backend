@@ -60,7 +60,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS cli_sessions (
     session_token TEXT PRIMARY KEY,
     refresh_token TEXT NOT NULL UNIQUE,
-    account_id TEXT NOT NULL,
+    account_id TEXT,
+    device_info TEXT,
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     FOREIGN KEY (account_id) REFERENCES users(account_id) ON DELETE CASCADE
@@ -127,7 +128,55 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_connections_kay_session_id ON connections(kay_session_id);
   CREATE INDEX IF NOT EXISTS idx_connections_service_name ON connections(service_name);
          CREATE INDEX IF NOT EXISTS idx_kay_sessions_account_id ON kay_sessions(account_id);
+`);
 
+db.exec(`
+  -- Migration: Add device_info column to cli_sessions if it doesn't exist
+  -- SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check pragma
+  -- This is safe to run multiple times
+`);
+try {
+  const tableInfo = db
+    .prepare("PRAGMA table_info(cli_sessions)")
+    .all() as Array<{ name: string; notnull: number }>;
+  const hasDeviceInfo = tableInfo.some((col) => col.name === "device_info");
+  if (!hasDeviceInfo) {
+    db.exec(`ALTER TABLE cli_sessions ADD COLUMN device_info TEXT`);
+  }
+
+  const accountIdColumn = tableInfo.find((col) => col.name === "account_id");
+  if (accountIdColumn && accountIdColumn.notnull === 1) {
+    console.log(
+      "[Database Migration] Making account_id nullable in cli_sessions"
+    );
+    db.exec(`
+      -- SQLite doesn't support MODIFY COLUMN, so we need to recreate the table
+      CREATE TABLE IF NOT EXISTS cli_sessions_new (
+        session_token TEXT PRIMARY KEY,
+        refresh_token TEXT NOT NULL UNIQUE,
+        account_id TEXT,
+        device_info TEXT,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES users(account_id) ON DELETE CASCADE
+      );
+      
+      INSERT INTO cli_sessions_new 
+      SELECT session_token, refresh_token, account_id, NULL, expires_at, created_at 
+      FROM cli_sessions;
+      
+      DROP TABLE cli_sessions;
+      ALTER TABLE cli_sessions_new RENAME TO cli_sessions;
+      
+      CREATE INDEX IF NOT EXISTS idx_cli_sessions_account_id ON cli_sessions(account_id);
+      CREATE INDEX IF NOT EXISTS idx_cli_sessions_refresh_token ON cli_sessions(refresh_token);
+    `);
+  }
+} catch (error) {
+  console.error("[Database Migration] Error:", error);
+}
+
+db.exec(`
   CREATE TRIGGER IF NOT EXISTS trg_update_users_updated_at
   AFTER UPDATE ON users
   BEGIN

@@ -37,46 +37,13 @@ authRouter.get("/status/:state", async (c) => {
 
   const accountId = getStateAccountId(state);
 
-  if (!accountId) {
-    return c.json({ error: "Invalid state" }, 400);
-  }
-
-  const sessionToken = generateCliSessionToken(accountId);
-  const refreshToken = generateRefreshToken();
-
-  const refreshExpiresInMs = validateRefreshTokenExpiration(
-    ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
-  );
-
-  storeCliSession(sessionToken, refreshToken, accountId, refreshExpiresInMs);
-
   removeState(state);
 
   return c.json({
     status: "completed",
     account_id: accountId,
-    token: sessionToken,
-    refresh_token: refreshToken,
     message:
-      "Authorization completed successfully. Use the token in Authorization header for future requests.",
-  });
-});
-
-authRouter.get("/me", authMiddleware(), (c) => {
-  const tokens = c.get("atlassian_tokens");
-  const accountId = c.get("account_id");
-
-  return c.json({
-    message: "User information",
-    data: {
-      account_id: accountId,
-      name: tokens.user.name,
-      email: tokens.user.email,
-      picture: tokens.user.picture,
-      account_type: tokens.user.account_type,
-      account_status: tokens.user.account_status,
-      resources: tokens.resources,
-    },
+      "Authorization completed successfully. Use your existing session token for authentication.",
   });
 });
 
@@ -94,7 +61,7 @@ authRouter.post("/refresh", async (c) => {
     return c.json({ error: "Invalid or expired refresh token" }, 401);
   }
 
-  const newSessionToken = generateCliSessionToken(session.account_id);
+  const newSessionToken = generateCliSessionToken();
   const newRefreshToken = generateRefreshToken();
 
   deleteCliSessionByRefreshToken(refresh_token);
@@ -105,8 +72,9 @@ authRouter.post("/refresh", async (c) => {
   storeCliSession(
     newSessionToken,
     newRefreshToken,
-    session.account_id,
-    refreshExpiresInMs
+    null,
+    refreshExpiresInMs,
+    undefined
   );
 
   return c.json({
@@ -124,7 +92,9 @@ authRouter.post("/logout", authMiddleware(), (c) => {
     deleteCliSession(sessionToken);
   }
 
-  deleteUserTokens(accountId);
+  if (accountId) {
+    deleteUserTokens(accountId);
+  }
 
   return c.json({
     message: "Logged out successfully",

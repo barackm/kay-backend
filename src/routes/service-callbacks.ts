@@ -19,13 +19,7 @@ import {
   getServicesByProvider,
   isValidService,
 } from "../services/connections/service-registry.js";
-import {
-  generateCliSessionToken,
-  generateRefreshToken,
-} from "../services/auth/auth.js";
-import { storeCliSession } from "../services/database/db-store.js";
 import { ENV } from "../config/env.js";
-import { validateRefreshTokenExpiration } from "../utils/validation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -111,26 +105,7 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
         );
 
         accountId = result.accountId;
-
-        if (result.isFirstConnection) {
-          completeState(state, result.accountId);
-
-          const sessionToken = generateCliSessionToken(result.accountId);
-          const refreshToken = generateRefreshToken();
-
-          const refreshExpiresInMs = validateRefreshTokenExpiration(
-            ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
-          );
-
-          storeCliSession(
-            sessionToken,
-            refreshToken,
-            result.accountId,
-            refreshExpiresInMs
-          );
-        } else {
-          completeState(state, result.accountId);
-        }
+        completeState(state, result.accountId);
         break;
 
       case "bitbucket":
@@ -154,28 +129,7 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
         );
 
         accountId = bitbucketResult.accountId;
-
-        if (bitbucketResult.isFirstConnection) {
-          completeState(state, bitbucketResult.accountId);
-
-          const sessionToken = generateCliSessionToken(
-            bitbucketResult.accountId
-          );
-          const refreshToken = generateRefreshToken();
-
-          const refreshExpiresInMs = validateRefreshTokenExpiration(
-            ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
-          );
-
-          storeCliSession(
-            sessionToken,
-            refreshToken,
-            bitbucketResult.accountId,
-            refreshExpiresInMs
-          );
-        } else {
-          completeState(state, bitbucketResult.accountId);
-        }
+        completeState(state, bitbucketResult.accountId);
         break;
 
       default:

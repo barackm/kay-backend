@@ -5,6 +5,7 @@ import type {
   ServiceName,
   ConnectionMetadata,
   ConnectionStatus,
+  ServiceConnectionInfo,
 } from "../../types/connections.js";
 import {
   handleOAuthCallback,
@@ -78,44 +79,22 @@ export function createKaySession(): string {
 }
 
 export function getOrCreateKaySessionByToken(sessionToken: string): string {
-  const session = getCliSessionByToken(sessionToken);
-  if (!session) {
-    throw new Error("Invalid session token");
-  }
-
-  const existing = db
-    .prepare(`SELECT id FROM kay_sessions WHERE account_id = ?`)
-    .get(session.account_id) as { id: string } | undefined;
-
-  if (existing) {
-    return existing.id;
-  }
-
+  // Fallback: if a kay_session cannot be resolved elsewhere, create a new one
   const kaySessionId = `kaysession_${Date.now()}_${Math.random()
     .toString(36)
     .substring(7)}`;
   const now = Date.now();
-
   db.prepare(
     `INSERT INTO kay_sessions (id, account_id, created_at, updated_at) VALUES (?, ?, ?, ?)`
-  ).run(kaySessionId, session.account_id, now, now);
-
+  ).run(kaySessionId, null, now, now);
   return kaySessionId;
 }
 
 export function getKaySessionIdByToken(
-  sessionToken: string
+  _sessionToken: string
 ): string | undefined {
-  const session = getCliSessionByToken(sessionToken);
-  if (!session) {
-    return undefined;
-  }
-
-  const kaySession = db
-    .prepare(`SELECT id FROM kay_sessions WHERE account_id = ?`)
-    .get(session.account_id) as { id: string } | undefined;
-
-  return kaySession?.id;
+  // No reliable mapping by token; require session_id to be provided by caller
+  return undefined;
 }
 
 export function updateKaySessionAccountId(
@@ -242,18 +221,80 @@ export function deleteConnection(
 
 export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
   const connections = db
-    .prepare(`SELECT service_name FROM connections WHERE kay_session_id = ?`)
-    .all(kaySessionId) as Array<{ service_name: string }>;
+    .prepare(
+      `SELECT service_name, metadata FROM connections WHERE kay_session_id = ?`
+    )
+    .all(kaySessionId) as Array<{ service_name: string; metadata: string }>;
 
   const status: ConnectionStatus = {
-    kyg: false,
-    jira: false,
-    confluence: false,
-    bitbucket: false,
+    kyg: { connected: false },
+    jira: { connected: false },
+    confluence: { connected: false },
+    bitbucket: { connected: false },
   };
 
-  for (const conn of connections) {
-    status[conn.service_name] = true;
+  for (const row of connections) {
+    const serviceName = row.service_name as ServiceName;
+    const metadata = JSON.parse(row.metadata) as ConnectionMetadata;
+
+    const serviceInfo: ServiceConnectionInfo = {
+      connected: true,
+    };
+
+    if (metadata.url || metadata.workspace_id) {
+      serviceInfo.metadata = {};
+      if (metadata.url) {
+        serviceInfo.metadata.url = metadata.url;
+      }
+      if (metadata.workspace_id) {
+        serviceInfo.metadata.workspace_id = metadata.workspace_id;
+      }
+    }
+
+    if (serviceName === "jira" || serviceName === "confluence") {
+      const storedToken = getUserTokens(metadata.account_id as string);
+      if (storedToken) {
+        serviceInfo.user = {
+          account_id: storedToken.user.account_id,
+          name: storedToken.user.name,
+          email: storedToken.user.email,
+          picture: storedToken.user.picture,
+          account_type: storedToken.user.account_type,
+          account_status: storedToken.user.account_status,
+        };
+      }
+    } else if (serviceName === "bitbucket") {
+      const user: ServiceConnectionInfo["user"] = {};
+      if (metadata.account_id) user.account_id = metadata.account_id as string;
+      if (metadata.username) user.username = metadata.username as string;
+      if (metadata.display_name) {
+        user.display_name = metadata.display_name as string;
+        user.name = metadata.display_name as string;
+      }
+      if (metadata.avatar_url) user.avatar_url = metadata.avatar_url as string;
+      if (Object.keys(user).length > 0) {
+        serviceInfo.user = user;
+      }
+    } else if (serviceName === "kyg") {
+      const user: ServiceConnectionInfo["user"] = {};
+      if (metadata.account_id) user.account_id = metadata.account_id as string;
+      if (metadata.email) user.email = metadata.email as string;
+      const fullName = `${metadata.first_name || ""} ${
+        metadata.last_name || ""
+      }`.trim();
+      if (fullName) user.name = fullName;
+      if (metadata.first_name) user.first_name = metadata.first_name as string;
+      if (metadata.last_name) user.last_name = metadata.last_name as string;
+      if (metadata.user_id) user.user_id = metadata.user_id as number;
+      if (metadata.company_id) user.company_id = metadata.company_id as number;
+      if (metadata.company_name)
+        user.company_name = metadata.company_name as string;
+      if (Object.keys(user).length > 0) {
+        serviceInfo.user = user;
+      }
+    }
+
+    status[serviceName] = serviceInfo;
   }
 
   return status;
@@ -265,7 +306,6 @@ export async function connectAtlassianService(
   code: string
 ): Promise<{
   connection: Connection;
-  isFirstConnection: boolean;
   accountId: string;
 }> {
   const kaySession = getKaySessionById(kaySessionId);
@@ -361,12 +401,6 @@ export async function connectAtlassianService(
     })),
   };
 
-  const isFirstConnection = kaySession.account_id === null;
-
-  if (isFirstConnection) {
-    updateKaySessionAccountId(kaySessionId, accountId);
-  }
-
   const expiresAt = Date.now() + tokens.expires_in * 1000;
 
   const connection = storeConnection(
@@ -400,7 +434,6 @@ export async function connectAtlassianService(
 
   return {
     connection,
-    isFirstConnection,
     accountId,
   };
 }
@@ -427,7 +460,6 @@ export async function connectBitbucketService(
   callbackUrl: string
 ): Promise<{
   connection: Connection;
-  isFirstConnection: boolean;
   accountId: string;
 }> {
   const kaySession = getKaySessionById(kaySessionId);
@@ -467,17 +499,30 @@ export async function connectBitbucketService(
     throw new Error("No refresh token received from Bitbucket");
   }
 
+  console.log(
+    "[connectBitbucketService] Bitbucket user payload:",
+    JSON.stringify({
+      uuid: user.uuid,
+      username: (user as unknown as { username?: string; nickname?: string })
+        .username,
+      nickname: (user as unknown as { nickname?: string }).nickname,
+      display_name: user.display_name,
+      avatar: user.links?.avatar?.href,
+    })
+  );
+  console.log("[connectBitbucketService] Bitbucket token info:", {
+    has_refresh_token: Boolean(tokens.refresh_token),
+    expires_in: tokens.expires_in,
+    scopes: tokens.scopes,
+  });
+
   const accountId = `bitbucket_${user.uuid}`;
-  const isFirstConnection = kaySession.account_id === null;
 
-  if (isFirstConnection) {
-    updateKaySessionAccountId(kaySessionId, accountId);
-  }
-
+  const nickname = (user as unknown as { nickname?: string }).nickname;
   const metadata: ConnectionMetadata = {
     account_id: accountId,
     uuid: user.uuid,
-    username: user.username,
+    username: user.username || nickname || undefined,
     display_name: user.display_name,
     avatar_url: user.links?.avatar?.href,
     user_data: user,
@@ -498,7 +543,6 @@ export async function connectBitbucketService(
 
   return {
     connection,
-    isFirstConnection,
     accountId,
   };
 }
@@ -527,7 +571,6 @@ export async function connectKygService(
   password: string
 ): Promise<{
   connection: Connection;
-  isFirstConnection: boolean;
   accountId: string;
 }> {
   if (!ENV.KYG_CORE_BASE_URL) {
@@ -586,11 +629,6 @@ export async function connectKygService(
   }
 
   const accountId = `kyg_${data.user.userid}`;
-  const isFirstConnection = kaySession.account_id === null;
-
-  if (isFirstConnection) {
-    updateKaySessionAccountId(kaySessionId, accountId);
-  }
 
   const metadata: ConnectionMetadata = {
     account_id: accountId,
@@ -615,7 +653,6 @@ export async function connectKygService(
 
   return {
     connection,
-    isFirstConnection,
     accountId,
   };
 }

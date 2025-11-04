@@ -19,7 +19,31 @@ export interface Connection {
   updated_at: number;
 }
 
+export interface ServiceConnectionInfo {
+  connected: boolean;
+  user?: {
+    account_id?: string;
+    name?: string;
+    email?: string;
+    username?: string;
+    display_name?: string;
+    picture?: string;
+    avatar_url?: string;
+    account_type?: string;
+    account_status?: string;
+    [key: string]: unknown;
+  };
+  metadata?: {
+    url?: string;
+    workspace_id?: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface ConnectionStatus {
-  [service: string]: boolean;
+  kyg: ServiceConnectionInfo;
+  jira: ServiceConnectionInfo;
+  confluence: ServiceConnectionInfo;
+  bitbucket: ServiceConnectionInfo;
 }
 

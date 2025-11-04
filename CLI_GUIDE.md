@@ -145,11 +145,20 @@ connection.**
 4. **No polling needed** - service is connected automatically
 5. CLI already has `session_token` and `refresh_token` from first connection
 
-### Step 4: Check Connection Status
+### Step 4: Check Connection Status & User Info
 
-**Endpoint:** `GET /connections?session_id={kay_session_id}`
+**Endpoint:** `GET /connections`
 
-**Request:**
+**Request Options:**
+
+**Option 1: Using session token (Recommended)**
+
+```
+Authorization: Bearer {session_token}
+GET /connections
+```
+
+**Option 2: Using session_id (Legacy/Backward Compatible)**
 
 ```
 GET /connections?session_id=kaysession_1234567890_abc123
@@ -160,15 +169,50 @@ GET /connections?session_id=kaysession_1234567890_abc123
 ```json
 {
   "connections": {
-    "kyg": false,
-    "jira": true,
-    "confluence": true,
-    "bitbucket": false
+    "jira": {
+      "connected": true,
+      "user": {
+        "account_id": "557058:abc123...",
+        "name": "John Doe",
+        "email": "john@example.com",
+        "picture": "https://...",
+        "account_type": "atlassian",
+        "account_status": "active"
+      },
+      "metadata": {
+        "url": "https://example.atlassian.net"
+      }
+    },
+    "confluence": {
+      "connected": true,
+      "user": {
+        "account_id": "557058:abc123...",
+        "name": "John Doe",
+        "email": "john@example.com"
+      },
+      "metadata": {
+        "url": "https://example.atlassian.net"
+      }
+    },
+    "bitbucket": {
+      "connected": true,
+      "user": {
+        "account_id": "bitbucket_abc123",
+        "username": "johndoe",
+        "display_name": "John Doe",
+        "avatar_url": "https://..."
+      }
+    },
+    "kyg": {
+      "connected": false
+    }
   }
 }
 ```
 
-**Error Response (Invalid session_id):**
+**Error Responses:**
+
+**Invalid session_id:**
 
 ```json
 {
@@ -178,12 +222,22 @@ GET /connections?session_id=kaysession_1234567890_abc123
 }
 ```
 
-**Actions on Error:**
+**Missing authentication:**
 
-1. Clear the stored `session_id` from local config
-2. Prompt user to reconnect services: "Your session has expired. Please
-   reconnect your services."
-3. Call `/connections/connect` without a `session_id` to create a new session
+```json
+{
+  "error": "TOKEN_MISSING",
+  "code": "TOKEN_MISSING",
+  "message": "No Authorization header or invalid format"
+}
+```
+
+**Actions:**
+
+1. **Preferred**: Use `Authorization: Bearer {session_token}` header
+2. **Fallback**: If no session token, use `session_id` query parameter
+3. On `session_reset_required: true`, clear stored `session_id` and reconnect
+   services
 
 ### Step 5: Disconnect a Service
 
@@ -235,32 +289,37 @@ Called automatically when session token expires (401 response).
 
 ## API Endpoints
 
-### GET /auth/me
+### GET /connections
 
-Get authenticated user information.
+Get connection status and user information for all services. This replaces the
+old `/auth/me` endpoint.
 
 **Request:**
 
+**Option 1: Using session token (Recommended)**
+
 ```
-Authorization: Bearer {token}
+Authorization: Bearer {session_token}
+GET /connections
+```
+
+**Option 2: Using session_id (Legacy)**
+
+```
+GET /connections?session_id={kay_session_id}
 ```
 
 **Response:**
 
-```json
-{
-  "message": "User information",
-  "data": {
-    "account_id": "557058:abc123-def456-ghi789",
-    "name": "John Doe",
-    "email": "john.doe@example.com",
-    "picture": "https://...",
-    "account_type": "atlassian",
-    "account_status": "active",
-    "resources": [...]
-  }
-}
-```
+See
+[Step 4: Check Connection Status & User Info](#step-4-check-connection-status--user-info)
+above for the full response format.
+
+**Key Features:**
+
+- Returns user info for each connected service
+- Shows connection status for all services
+- Works with session tokens (preferred) or session_id (backward compatible)
 
 ### POST /auth/logout
 
@@ -288,8 +347,15 @@ export interface ConnectServiceResponse { service: string; session_id: string;
 authorization_url: string; state: string; message: string; session_reset?:
 boolean; }
 
-export interface ConnectionStatusResponse { connections: { kyg: boolean; jira:
-boolean; confluence: boolean; bitbucket: boolean; }; }
+export interface ServiceConnectionInfo { connected: boolean; user?: {
+account_id?: string; name?: string; email?: string; username?: string;
+display_name?: string; picture?: string; avatar_url?: string; account_type?:
+string; account_status?: string; [key: string]: unknown; }; metadata?: { url?:
+string; workspace_id?: string; [key: string]: unknown; }; }
+
+export interface ConnectionStatusResponse { connections: { kyg:
+ServiceConnectionInfo; jira: ServiceConnectionInfo; confluence:
+ServiceConnectionInfo; bitbucket: ServiceConnectionInfo; }; }
 
 export interface ConnectionStatusError { error: string; message: string;
 session_reset_required: boolean; }

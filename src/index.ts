@@ -15,7 +15,9 @@ import mcpRouter from "./routes/mcp.js";
 import healthRouter from "./routes/health.js";
 import connectionsRouter from "./routes/connections.js";
 import serviceCallbacksRouter from "./routes/service-callbacks.js";
+import sessionRouter from "./routes/session.js";
 import "./types/hono.js";
+import { cleanupExpiredSessions } from "./services/database/db-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,6 +45,10 @@ app.route("/", askRouter);
 app.route("/mcp", mcpRouter);
 app.route("/connections", connectionsRouter);
 app.route("/connections", serviceCallbacksRouter);
+app.route("/session", sessionRouter);
+
+cleanupExpiredSessions();
+setInterval(cleanupExpiredSessions, 24 * 60 * 60 * 1000);
 
 serve({
   fetch: app.fetch,

@@ -1,9 +1,14 @@
 import db from "./database.js";
+import crypto from "crypto";
 import type {
   StoredToken,
   AtlassianUser,
   AccessibleResource,
 } from "../../types/oauth.js";
+
+function hashRefreshToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
 
 export function storeUserTokens(
   accountId: string,
@@ -179,30 +184,37 @@ export function deleteUserTokens(accountId: string): void {
 export function storeCliSession(
   sessionToken: string,
   refreshToken: string,
-  accountId: string,
-  expiresIn: number
+  accountId: string | null,
+  expiresInMs: number,
+  deviceInfo?: string
 ): void {
   const now = Date.now();
+  const hashedRefreshToken = hashRefreshToken(refreshToken);
   db.prepare(
-    `INSERT OR REPLACE INTO cli_sessions (session_token, refresh_token, account_id, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(sessionToken, refreshToken, accountId, now + expiresIn * 1000, now);
+    `INSERT OR REPLACE INTO cli_sessions (session_token, refresh_token, account_id, device_info, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionToken,
+    hashedRefreshToken,
+    accountId,
+    deviceInfo || null,
+    now + expiresInMs,
+    now
+  );
 }
 
 export function getCliSessionByToken(sessionToken: string):
   | {
-      account_id: string;
       refresh_token: string;
       expires_at: number;
     }
   | undefined {
   return db
     .prepare(
-      `SELECT account_id, refresh_token, expires_at FROM cli_sessions WHERE session_token = ?`
+      `SELECT refresh_token, expires_at FROM cli_sessions WHERE session_token = ?`
     )
     .get(sessionToken) as
     | {
-        account_id: string;
         refresh_token: string;
         expires_at: number;
       }
@@ -212,18 +224,17 @@ export function getCliSessionByToken(sessionToken: string):
 export function getCliSessionByRefreshToken(refreshToken: string):
   | {
       session_token: string;
-      account_id: string;
       expires_at: number;
     }
   | undefined {
+  const hashedToken = hashRefreshToken(refreshToken);
   return db
     .prepare(
-      `SELECT session_token, account_id, expires_at FROM cli_sessions WHERE refresh_token = ?`
+      `SELECT session_token, expires_at FROM cli_sessions WHERE refresh_token = ?`
     )
-    .get(refreshToken) as
+    .get(hashedToken) as
     | {
         session_token: string;
-        account_id: string;
         expires_at: number;
       }
     | undefined;
@@ -236,7 +247,41 @@ export function deleteCliSession(sessionToken: string): void {
 }
 
 export function deleteCliSessionByRefreshToken(refreshToken: string): void {
+  const hashedToken = hashRefreshToken(refreshToken);
   db.prepare(`DELETE FROM cli_sessions WHERE refresh_token = ?`).run(
-    refreshToken
+    hashedToken
   );
+}
+
+export function getCliSessionBySessionToken(sessionToken: string):
+  | {
+      refresh_token: string;
+      expires_at: number;
+    }
+  | undefined {
+  return db
+    .prepare(
+      `SELECT refresh_token, expires_at FROM cli_sessions WHERE session_token = ?`
+    )
+    .get(sessionToken) as
+    | {
+        refresh_token: string;
+        expires_at: number;
+      }
+    | undefined;
+}
+
+export function updateCliSessionToken(
+  oldSessionToken: string,
+  newSessionToken: string,
+  newExpiresAt: number
+): void {
+  db.prepare(
+    `UPDATE cli_sessions SET session_token = ?, expires_at = ? WHERE session_token = ?`
+  ).run(newSessionToken, newExpiresAt, oldSessionToken);
+}
+
+export function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  db.prepare(`DELETE FROM cli_sessions WHERE expires_at < ?`).run(now);
 }
