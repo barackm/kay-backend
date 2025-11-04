@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { ENV } from "../config/env.js";
+import { ENV } from "../../config/env.js";
 
 let openaiClient: OpenAI | null = null;
 

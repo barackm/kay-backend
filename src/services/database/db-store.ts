@@ -3,7 +3,7 @@ import type {
   StoredToken,
   AtlassianUser,
   AccessibleResource,
-} from "../types/oauth.js";
+} from "../../types/oauth.js";
 
 export function storeUserTokens(
   accountId: string,
@@ -44,33 +44,44 @@ export function storeUserTokens(
       now
     );
 
+    const resourceIdsToDelete = db
+      .prepare(`SELECT id FROM accessible_resources WHERE account_id = ?`)
+      .all(accountId) as Array<{ id: string }>;
+
+    if (resourceIdsToDelete.length > 0) {
+      const placeholders = resourceIdsToDelete.map(() => "?").join(",");
+      db.prepare(
+        `DELETE FROM resource_scopes WHERE resource_id IN (${placeholders})`
+      ).run(...resourceIdsToDelete.map((r) => r.id));
+    }
+
     db.prepare(`DELETE FROM accessible_resources WHERE account_id = ?`).run(
       accountId
     );
 
     for (const resource of resources) {
-      const resourceId = db
-        .prepare(
-          `INSERT INTO accessible_resources (id, account_id, resource_id, url, name, avatar_url, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           RETURNING id`
-        )
-        .get(
-          resource.id,
-          accountId,
-          resource.id,
-          resource.url,
-          resource.name,
-          resource.avatarUrl,
-          now
-        ) as {
-        id: string;
-      };
+      const resourceDbId = `${accountId}:${resource.id}`;
+      console.log(
+        `[DB] Storing resource ${resource.id} with scopes:`,
+        resource.scopes
+      );
+      db.prepare(
+        `INSERT OR REPLACE INTO accessible_resources (id, account_id, resource_id, url, name, avatar_url, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        resourceDbId,
+        accountId,
+        resource.id,
+        resource.url,
+        resource.name,
+        resource.avatarUrl,
+        now
+      );
 
       for (const scope of resource.scopes) {
         db.prepare(
           `INSERT OR IGNORE INTO resource_scopes (resource_id, scope) VALUES (?, ?)`
-        ).run(resource.id, scope);
+        ).run(resourceDbId, scope);
       }
     }
   })();
@@ -117,13 +128,19 @@ export function getUserTokens(accountId: string): StoredToken | undefined {
   const resourcesWithScopes = resources.map((resource) => {
     const scopes = db
       .prepare(`SELECT scope FROM resource_scopes WHERE resource_id = ?`)
-      .all(resource.resource_id) as Array<{ scope: string }>;
+      .all(resource.id) as Array<{ scope: string }>;
+
+    const scopeList = scopes.map((s) => s.scope);
+    console.log(
+      `[DB] Retrieved resource ${resource.resource_id} with ${scopeList.length} scopes:`,
+      scopeList
+    );
 
     return {
-      id: resource.id,
+      id: resource.resource_id,
       url: resource.url,
       name: resource.name,
-      scopes: scopes.map((s) => s.scope),
+      scopes: scopeList,
       avatarUrl: resource.avatar_url || "",
     };
   });

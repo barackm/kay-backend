@@ -1,4 +1,4 @@
-import db from "./database.js";
+import db from "../database/database.js";
 import type { AskServiceContext } from "./ask-service.js";
 
 const CONFIRMATION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes

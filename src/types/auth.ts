@@ -20,11 +20,17 @@ export interface JiraProject {
   name: string;
 }
 
+export interface ConfluenceSpace {
+  key: string;
+  name: string;
+}
+
 export interface UserContext {
   accountId: string;
   displayName: string;
   email: string;
   baseUrl: string;
   projects: JiraProject[];
+  confluenceSpaces: ConfluenceSpace[];
   permissions: string[];
 }

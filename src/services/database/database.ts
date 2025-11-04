@@ -88,9 +88,45 @@ db.exec(`
     FOREIGN KEY (account_id) REFERENCES users(account_id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS oauth_states (
+    state TEXT PRIMARY KEY,
+    kay_session_id TEXT,
+    service_name TEXT,
+    account_id TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_interactive_sessions_account_id ON interactive_sessions(account_id);
   CREATE INDEX IF NOT EXISTS idx_pending_confirmations_account_id ON pending_confirmations(account_id);
   CREATE INDEX IF NOT EXISTS idx_pending_confirmations_expires_at ON pending_confirmations(expires_at);
+  CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at);
+
+         CREATE TABLE IF NOT EXISTS kay_sessions (
+           id TEXT PRIMARY KEY,
+           account_id TEXT,
+           created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL,
+           FOREIGN KEY (account_id) REFERENCES users(account_id) ON DELETE CASCADE
+         );
+
+  CREATE TABLE IF NOT EXISTS connections (
+    id TEXT PRIMARY KEY,
+    kay_session_id TEXT NOT NULL,
+    service_name TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    expires_at INTEGER,
+    metadata TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (kay_session_id) REFERENCES kay_sessions(id) ON DELETE CASCADE,
+    UNIQUE(kay_session_id, service_name)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_connections_kay_session_id ON connections(kay_session_id);
+  CREATE INDEX IF NOT EXISTS idx_connections_service_name ON connections(service_name);
+         CREATE INDEX IF NOT EXISTS idx_kay_sessions_account_id ON kay_sessions(account_id);
 
   CREATE TRIGGER IF NOT EXISTS trg_update_users_updated_at
   AFTER UPDATE ON users
@@ -108,6 +144,18 @@ db.exec(`
   AFTER UPDATE ON interactive_sessions
   BEGIN
     UPDATE interactive_sessions SET updated_at = (strftime('%s','now') * 1000) WHERE session_id = NEW.session_id;
+  END;
+
+         CREATE TRIGGER IF NOT EXISTS trg_update_kay_sessions_updated_at
+         AFTER UPDATE ON kay_sessions
+         BEGIN
+           UPDATE kay_sessions SET updated_at = (strftime('%s','now') * 1000) WHERE id = NEW.id;
+         END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_update_connections_updated_at
+  AFTER UPDATE ON connections
+  BEGIN
+    UPDATE connections SET updated_at = (strftime('%s','now') * 1000) WHERE id = NEW.id;
   END;
 `);
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
-import { MCPJiraService } from "../services/mcp-jira-service.js";
+import { MCPJiraService } from "../services/mcp/mcp-jira-service.js";
 import { ENV } from "../config/env.js";
 
 const mcpRouter = new Hono();

@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import db from "../services/database.js";
-import { isOpenAIConfigured } from "../services/openai-service.js";
+import db from "../services/database/database.js";
+import { isOpenAIConfigured } from "../services/ai/openai-service.js";
 import { ENV } from "../config/env.js";
-import { MCPJiraService } from "../services/mcp-jira-service.js";
+import { MCPJiraService } from "../services/mcp/mcp-jira-service.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { refreshAccessTokenIfNeeded } from "../services/auth/token-service.js";
 
 const healthRouter = new Hono();
 
@@ -26,6 +27,14 @@ interface HealthStatus {
       connected?: boolean;
       initialized?: boolean;
       toolCount?: number;
+      tools?: Array<{ name: string; description?: string }>;
+      message?: string;
+    };
+    confluence: {
+      status: "healthy" | "unhealthy";
+      accessible: boolean;
+      spaceCount?: number;
+      tools?: Array<{ name: string; description?: string }>;
       message?: string;
     };
   };
@@ -48,6 +57,10 @@ healthRouter.get("/", authMiddleware(), async (c) => {
       mcp_jira: {
         status: "disabled",
         enabled: ENV.MCP_JIRA_ENABLED,
+      },
+      confluence: {
+        status: "healthy",
+        accessible: false,
       },
     },
   };
@@ -73,6 +86,8 @@ healthRouter.get("/", authMiddleware(), async (c) => {
     health.services.openai.status = "healthy";
   }
 
+  let allTools: Array<{ name: string; description?: string }> = [];
+
   if (ENV.MCP_JIRA_ENABLED) {
     try {
       const jiraService = new MCPJiraService();
@@ -80,6 +95,19 @@ healthRouter.get("/", authMiddleware(), async (c) => {
       try {
         await jiraService.initialize(tokens);
         const connectionStatus = await jiraService.getConnectionStatus();
+        const tools = connectionStatus.connected
+          ? await jiraService.getTools(true)
+          : [];
+
+        allTools = tools.map((t) => {
+          const tool: { name: string; description?: string } = {
+            name: t.name,
+          };
+          if (t.description) {
+            tool.description = t.description;
+          }
+          return tool;
+        });
 
         const mcpJiraStatus: typeof health.services.mcp_jira = {
           status: connectionStatus.connected ? "healthy" : "unhealthy",
@@ -87,6 +115,7 @@ healthRouter.get("/", authMiddleware(), async (c) => {
           connected: connectionStatus.connected,
           initialized: connectionStatus.initialized,
           toolCount: connectionStatus.toolCount,
+          tools: allTools,
         };
         if (connectionStatus.error) {
           mcpJiraStatus.message = connectionStatus.error;
@@ -116,6 +145,65 @@ healthRouter.get("/", authMiddleware(), async (c) => {
       };
       hasNonCriticalFailure = true;
     }
+  }
+
+  try {
+    const confluenceResource = tokens.resources.find((r) =>
+      r.url.includes("atlassian.net")
+    );
+
+    if (confluenceResource) {
+      const accessToken = await refreshAccessTokenIfNeeded(tokens);
+      const confluenceUrl = confluenceResource.url.replace(
+        ".atlassian.net",
+        ".atlassian.net/wiki"
+      );
+
+      const response = await fetch(`${confluenceUrl}/rest/api/space?limit=10`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const spaces = data.results || data || [];
+        const confluenceTools = allTools.filter((t) =>
+          t.name.startsWith("confluence_")
+        );
+
+        const confluenceStatus: typeof health.services.confluence = {
+          status: "healthy",
+          accessible: true,
+          spaceCount: Array.isArray(spaces) ? spaces.length : 0,
+        };
+
+        if (confluenceTools.length > 0) {
+          confluenceStatus.tools = confluenceTools;
+        }
+
+        health.services.confluence = confluenceStatus;
+      } else {
+        health.services.confluence = {
+          status: "unhealthy",
+          accessible: false,
+          message: `Confluence API returned ${response.status}`,
+        };
+      }
+    } else {
+      health.services.confluence = {
+        status: "unhealthy",
+        accessible: false,
+        message: "No Confluence resource found",
+      };
+    }
+  } catch (error) {
+    health.services.confluence = {
+      status: "unhealthy",
+      accessible: false,
+      message: error instanceof Error ? error.message : "Unknown error",
+    };
   }
 
   if (hasCriticalFailure) {

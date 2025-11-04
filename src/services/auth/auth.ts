@@ -4,8 +4,8 @@ import type {
   JiraCredentials,
   JwtPayload,
   CliSessionPayload,
-} from "../types/auth.js";
-import { ENV } from "../config/env.js";
+} from "../../types/auth.js";
+import { ENV } from "../../config/env.js";
 
 export function generateToken(credentials: JiraCredentials): string {
   return jwt.sign(credentials, ENV.JWT_SECRET, {

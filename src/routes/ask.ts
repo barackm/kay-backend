@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
-import { AskService } from "../services/ask-service.js";
+import { AskService } from "../services/ai/ask-service.js";
 import type {
   AskRequest,
   AskResponse,
@@ -27,12 +27,16 @@ askRouter.post("/ask", authMiddleware(), async (c) => {
     const accountId = c.get("account_id");
     const atlassianTokens = c.get("atlassian_tokens");
     const jiraProjects = c.get("jira_projects") || [];
+    const confluenceSpaces = c.get("confluence_spaces") || [];
 
+    const sessionToken = c.get("session_token");
     const response = await askService.processRequest({
       accountId,
       atlassianTokens,
       request: body,
       jiraProjects,
+      confluenceSpaces,
+      sessionToken,
     });
 
     return c.json<AskResponse>(response);
@@ -67,6 +71,8 @@ askRouter.post("/ask/confirm", authMiddleware(), async (c) => {
 
     const accountId = c.get("account_id");
     const atlassianTokens = c.get("atlassian_tokens");
+    const jiraProjects = c.get("jira_projects") || [];
+    const confluenceSpaces = c.get("confluence_spaces") || [];
 
     const response = await askService.processConfirmation({
       accountId,
@@ -76,6 +82,8 @@ askRouter.post("/ask/confirm", authMiddleware(), async (c) => {
         prompt: "",
       },
       approved: body.approved,
+      jiraProjects,
+      confluenceSpaces,
     });
 
     return c.json<AskResponse>(response);

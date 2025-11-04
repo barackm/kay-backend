@@ -1,9 +1,9 @@
-import { ENV } from "../config/env.js";
+import { ENV } from "../../config/env.js";
 import type {
   AtlassianTokenResponse,
   AtlassianUser,
   AccessibleResource,
-} from "../types/oauth.js";
+} from "../../types/oauth.js";
 
 async function exchangeCodeForTokens(
   code: string
@@ -18,7 +18,7 @@ async function exchangeCodeForTokens(
       client_id: ENV.ATLASSIAN_CLIENT_ID,
       client_secret: ENV.ATLASSIAN_CLIENT_SECRET,
       code,
-      redirect_uri: ENV.ATLASSIAN_REDIRECT_URI,
+      redirect_uri: ENV.ATLASSIAN_CALLBACK_URL,
     }),
   });
 
@@ -70,7 +70,12 @@ async function fetchAccessibleResources(
     );
   }
 
-  return response.json();
+  const resources = await response.json();
+  console.log(
+    "[OAuth] Fetched accessible resources:",
+    JSON.stringify(resources, null, 2)
+  );
+  return resources;
 }
 
 export async function handleOAuthCallback(code: string): Promise<{
@@ -84,9 +89,39 @@ export async function handleOAuthCallback(code: string): Promise<{
     fetchAccessibleResources(tokens.access_token),
   ]);
 
+  const mergedResources = new Map<string, AccessibleResource>();
+
+  for (const resource of resources) {
+    const existing = mergedResources.get(resource.id);
+    if (existing) {
+      const mergedScopes = new Set([...existing.scopes, ...resource.scopes]);
+      console.log(`[OAuth] Merging resource ${resource.id}:`, {
+        existingScopes: existing.scopes,
+        newScopes: resource.scopes,
+        mergedScopes: Array.from(mergedScopes),
+      });
+      mergedResources.set(resource.id, {
+        ...existing,
+        scopes: Array.from(mergedScopes),
+      });
+    } else {
+      mergedResources.set(resource.id, resource);
+    }
+  }
+
+  const finalResources = Array.from(mergedResources.values());
+  console.log(
+    "[OAuth] Final merged resources:",
+    finalResources.map((r) => ({
+      id: r.id,
+      name: r.name,
+      scopes: r.scopes,
+    }))
+  );
+
   return {
     tokens,
     user,
-    resources,
+    resources: finalResources,
   };
 }

@@ -1,16 +1,7 @@
 import { MCPClient, type MCPTool } from "./mcp-client.js";
-import { ENV } from "../config/env.js";
-import type { StoredToken } from "../types/oauth.js";
-import { refreshAccessTokenIfNeeded } from "./token-service.js";
-
-export interface JiraMCPConfig {
-  jiraUrl: string;
-  jiraUsername: string;
-  jiraApiToken: string;
-  confluenceUrl?: string;
-  confluenceUsername?: string;
-  confluenceApiToken?: string;
-}
+import { ENV } from "../../config/env.js";
+import type { StoredToken } from "../../types/oauth.js";
+import { refreshAccessTokenIfNeeded } from "../auth/token-service.js";
 
 export class MCPJiraService {
   private client: MCPClient | null = null;
@@ -30,18 +21,116 @@ export class MCPJiraService {
       throw new Error("No Jira resource found for user");
     }
 
+    console.log(
+      "[MCP] Initializing with resource scopes:",
+      jiraResource.scopes || "NO SCOPES"
+    );
     await this.createClient(userTokens, jiraResource);
   }
 
   private async createClient(
     tokens: StoredToken,
-    jiraResource: { id: string; url: string }
+    jiraResource: { id: string; url: string; scopes?: string[] }
   ): Promise<void> {
+    if (this.client) {
+      await this.disconnect();
+    }
+
     const accessToken = await refreshAccessTokenIfNeeded(tokens);
+
+    const confluenceUrl = jiraResource.url.replace(
+      ".atlassian.net",
+      ".atlassian.net/wiki"
+    );
+
+    try {
+      const testUrl = `https://api.atlassian.com/ex/confluence/${jiraResource.id}/api/v2/spaces?limit=1`;
+      const testResponse = await fetch(testUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+      });
+      console.log(
+        `[MCP] Token test - Confluence API v2 spaces endpoint: ${testResponse.status} ${testResponse.statusText}`
+      );
+      if (!testResponse.ok) {
+        const errorText = await testResponse.text();
+        console.error(`[MCP] Token test failed: ${errorText}`);
+
+        if (
+          testResponse.status === 401 &&
+          errorText.includes("scope does not match")
+        ) {
+          console.error(
+            `[MCP] CRITICAL: The access token does not have the required Confluence scopes. ` +
+              `This usually means the token was issued before Confluence scopes were added. ` +
+              `The user needs to re-authenticate to get a new token with Confluence permissions.`
+          );
+          throw new Error(
+            "Token missing Confluence scopes. Please re-authenticate by running the login command again."
+          );
+        }
+      } else {
+        console.log(
+          `[MCP] Token test successful - token has required Confluence scopes`
+        );
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Token missing Confluence scopes")
+      ) {
+        throw error;
+      }
+      console.error(
+        `[MCP] Token test error:`,
+        error instanceof Error ? error.message : "Unknown"
+      );
+    }
+
+    const resourceScopes = jiraResource.scopes || [];
+    const hasConfluenceWrite = resourceScopes.includes(
+      "write:confluence-content"
+    );
+    const hasConfluenceRead = resourceScopes.some((scope: string) =>
+      scope.includes("confluence")
+    );
+
+    console.log("[MCP] Confluence Configuration:");
+    console.log(`  CONFLUENCE_URL: ${confluenceUrl}`);
+    console.log(`  CONFLUENCE_CLOUD_ID: ${jiraResource.id}`);
+    console.log(`  ATLASSIAN_OAUTH_CLOUD_ID: ${jiraResource.id}`);
+    console.log(`  JIRA_URL: ${jiraResource.url}`);
+    console.log(
+      `  ATLASSIAN_OAUTH_ACCESS_TOKEN: ${accessToken.substring(0, 20)}...`
+    );
+    console.log(
+      `  Token expires at: ${new Date(tokens.expires_at).toISOString()}`
+    );
+    console.log(
+      `  Resource scopes (${resourceScopes.length}):`,
+      resourceScopes
+    );
+    console.log(`  Has Confluence write scope: ${hasConfluenceWrite}`);
+    console.log(`  Has Confluence read scope: ${hasConfluenceRead}`);
+
+    if (!hasConfluenceWrite) {
+      console.warn(
+        "[MCP] WARNING: Token missing 'write:confluence-content' scope. User needs to re-authenticate."
+      );
+    }
+    if (!hasConfluenceRead) {
+      console.warn(
+        "[MCP] WARNING: Token missing Confluence read scopes. User needs to re-authenticate."
+      );
+    }
 
     const env: Record<string, string> = {
       JIRA_URL: jiraResource.url,
+      CONFLUENCE_URL: confluenceUrl,
       ATLASSIAN_OAUTH_CLOUD_ID: jiraResource.id,
+      CONFLUENCE_CLOUD_ID: jiraResource.id,
       ATLASSIAN_OAUTH_ACCESS_TOKEN: accessToken,
       MCP_VERY_VERBOSE: "true",
       MCP_LOGGING_STDOUT: "true",
@@ -52,11 +141,25 @@ export class MCPJiraService {
       baseArgs[baseArgs.length - 1] || "ghcr.io/sooperset/mcp-atlassian:latest";
     const dockerArgs = baseArgs.slice(0, -1);
 
+    console.log("[MCP] Docker environment variables being passed:");
     for (const [key, value] of Object.entries(env)) {
       dockerArgs.push("-e", `${key}=${value}`);
+      if (key === "ATLASSIAN_OAUTH_ACCESS_TOKEN") {
+        console.log(
+          `  ${key}=${value.substring(0, 20)}... (${value.length} chars)`
+        );
+      } else {
+        console.log(`  ${key}=${value}`);
+      }
     }
 
     dockerArgs.push(imageName);
+    console.log(
+      "[MCP] Docker command:",
+      ENV.MCP_JIRA_COMMAND,
+      dockerArgs.slice(0, 10).join(" "),
+      "..."
+    );
 
     this.client = new MCPClient(ENV.MCP_JIRA_COMMAND, dockerArgs, {});
 
@@ -176,7 +279,23 @@ export class MCPJiraService {
       await this.client.connect();
     }
 
-    return this.client.callTool(toolName, arguments_);
+    try {
+      return await this.client.callTool(toolName, arguments_);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      if (
+        errorMessage.includes("401") ||
+        errorMessage.includes("Unauthorized")
+      ) {
+        console.warn(
+          "[MCP] 401 error detected, disconnecting and reconnecting with fresh token"
+        );
+        await this.disconnect();
+        throw new Error(`Authentication failed: ${errorMessage}`);
+      }
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {

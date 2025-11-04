@@ -1,15 +1,19 @@
-import type { AskRequest, AskResponse } from "../types/ask.js";
-import type { StoredToken } from "../types/oauth.js";
+import type { AskRequest, AskResponse } from "../../types/ask.js";
+import type { StoredToken } from "../../types/oauth.js";
 import {
   createChatCompletion,
   isOpenAIConfigured,
   type ChatMessage,
 } from "./openai-service.js";
 import { getSystemPrompt, getInteractivePrompt } from "./prompt-service.js";
-import { MCPJiraService } from "./mcp-jira-service.js";
-import { convertMCPToolsToOpenAI } from "../utils/mcp-tools.js";
-import { ENV } from "../config/env.js";
-import { refreshAccessTokenIfNeeded } from "./token-service.js";
+import { MCPJiraService } from "../mcp/mcp-jira-service.js";
+import { convertMCPToolsToOpenAI } from "../../utils/mcp-tools.js";
+import { ENV } from "../../config/env.js";
+import { refreshAccessTokenIfNeeded } from "../auth/token-service.js";
+import {
+  getKayConnectionStatusTool,
+  executeKayConnectionStatus,
+} from "./kay-tools.js";
 import {
   storeInteractiveSession as dbStoreInteractiveSession,
   getInteractiveSession as dbGetInteractiveSession,
@@ -27,6 +31,8 @@ export interface AskServiceContext {
   atlassianTokens: StoredToken;
   request: AskRequest;
   jiraProjects?: Array<{ key: string; name: string }>;
+  confluenceSpaces?: Array<{ key: string; name: string }>;
+  sessionToken?: string;
 }
 
 export class AskService {
@@ -91,13 +97,15 @@ export class AskService {
       return null;
     }
 
-    if (!this.jiraService || !this.jiraService.isInitialized()) {
-      try {
-        this.jiraService = new MCPJiraService();
-        await this.jiraService.initialize(context.atlassianTokens);
-      } catch (error) {
-        return null;
-      }
+    if (this.jiraService) {
+      await this.jiraService.disconnect();
+    }
+
+    try {
+      this.jiraService = new MCPJiraService();
+      await this.jiraService.initialize(context.atlassianTokens);
+    } catch (error) {
+      return null;
     }
 
     return this.jiraService;
@@ -133,18 +141,22 @@ export class AskService {
       }
 
       const projects = context.jiraProjects || [];
+      const confluenceSpaces = context.confluenceSpaces || [];
 
       const userInfo = {
         name: context.atlassianTokens.user.name,
         email: context.atlassianTokens.user.email,
         accountId: context.accountId,
         projects,
+        confluenceSpaces,
       };
 
       const jiraService = await this.getJiraService(context);
       const mcpTools = jiraService ? await jiraService.getTools() : [];
+      const kayTool = getKayConnectionStatusTool();
+      const allTools = [...mcpTools, kayTool];
       const tools =
-        mcpTools.length > 0 ? convertMCPToolsToOpenAI(mcpTools) : undefined;
+        allTools.length > 0 ? convertMCPToolsToOpenAI(allTools) : undefined;
 
       const messages: ChatMessage[] = [
         {
@@ -289,18 +301,22 @@ export class AskService {
       }
 
       const projects = context.jiraProjects || [];
+      const confluenceSpaces = context.confluenceSpaces || [];
 
       const userInfo = {
         name: context.atlassianTokens.user.name,
         email: context.atlassianTokens.user.email,
         accountId: context.accountId,
         projects,
+        confluenceSpaces,
       };
 
       const jiraService = await this.getJiraService(context);
       const mcpTools = jiraService ? await jiraService.getTools() : [];
+      const kayTool = getKayConnectionStatusTool();
+      const allTools = [...mcpTools, kayTool];
       const tools =
-        mcpTools.length > 0 ? convertMCPToolsToOpenAI(mcpTools) : undefined;
+        allTools.length > 0 ? convertMCPToolsToOpenAI(allTools) : undefined;
 
       const messages: ChatMessage[] = [
         {
@@ -333,7 +349,8 @@ export class AskService {
         tools,
         jiraService,
         true,
-        5
+        5,
+        context.sessionToken
       );
 
       const updatedHistory = [
@@ -377,7 +394,8 @@ export class AskService {
       | undefined,
     jiraService: MCPJiraService | null,
     isInteractive: boolean,
-    maxIterations = 5
+    maxIterations = 5,
+    sessionToken?: string
   ): Promise<{ message: string; toolCalls: unknown[] }> {
     let currentMessages = [...messages];
     let iteration = 0;
@@ -408,6 +426,8 @@ export class AskService {
           `[DEBUG] Passing ${tools.length} tools to OpenAI:`,
           tools.map((t) => t.function.name)
         );
+      } else {
+        console.log(`[DEBUG] No tools available to pass to OpenAI`);
       }
 
       const result = await createChatCompletion(completionOptions);
@@ -426,7 +446,7 @@ export class AskService {
         };
       }
 
-      if (result.toolCalls.length > 0 && jiraService) {
+      if (result.toolCalls.length > 0) {
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: result.content || "",
@@ -440,19 +460,30 @@ export class AskService {
 
         for (const toolCall of result.toolCalls) {
           try {
-            console.log(
-              `[DEBUG] Executing tool: ${toolCall.name} with args:`,
-              JSON.stringify(toolCall.arguments, null, 2)
-            );
-            const toolResult = await jiraService.callTool(
-              toolCall.name,
-              toolCall.arguments
-            );
-            console.log(
-              `[DEBUG] Tool ${toolCall.name} result (isError: ${toolResult.isError}):`,
-              toolResult.content.slice(0, 200)
-            );
+            let toolResult;
 
+            if (toolCall.name === "kay_connections_status") {
+              if (!sessionToken) {
+                throw new Error(
+                  "Session token required for kay_connections_status tool"
+                );
+              }
+              const statusResult = await executeKayConnectionStatus(
+                sessionToken,
+                toolCall.arguments
+              );
+              toolResult = {
+                content: [{ type: "text", text: JSON.stringify(statusResult) }],
+                isError: false,
+              };
+            } else if (jiraService) {
+              toolResult = await jiraService.callTool(
+                toolCall.name,
+                toolCall.arguments
+              );
+            } else {
+              throw new Error(`Tool ${toolCall.name} not available`);
+            }
             const resultContent = toolResult.content
               .map((item) => {
                 if (item.text) return item.text;

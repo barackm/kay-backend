@@ -1,107 +1,25 @@
 import { Hono } from "hono";
-import { readFileSync } from "fs";
-import { join } from "path";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
-import { handleOAuthCallback } from "../services/oauth.js";
 import {
-  storeUserTokens,
   deleteUserTokens,
-  storeCliSession,
   deleteCliSession,
   getCliSessionByRefreshToken,
   deleteCliSessionByRefreshToken,
-} from "../services/db-store.js";
+  storeCliSession,
+} from "../services/database/db-store.js";
 import {
   generateCliSessionToken,
   generateRefreshToken,
-} from "../services/auth.js";
+} from "../services/auth/auth.js";
 import { ENV } from "../config/env.js";
 import { validateRefreshTokenExpiration } from "../utils/validation.js";
-import { parseDurationToMs } from "../utils/time.js";
 import { authMiddleware } from "../middleware/auth.js";
-import { buildAuthorizationUrl, generateOAuthState } from "../utils/oauth.js";
 import {
-  storeState,
-  validateState,
-  completeState,
   getStateAccountId,
   isStateComplete,
   removeState,
-} from "../utils/state-store.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+} from "../services/connections/state-store.js";
 
 const authRouter = new Hono();
-
-authRouter.get("/login", async (c) => {
-  const state = generateOAuthState();
-  storeState(state);
-  const authorizationUrl = buildAuthorizationUrl(state);
-
-  return c.json({
-    message: "Please visit the URL below to authorize",
-    authorization_url: authorizationUrl,
-    state,
-  });
-});
-
-authRouter.get("/callback", async (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-
-  if (!code) {
-    return c.json({ error: "Missing authorization code" }, 400);
-  }
-
-  if (!state || !validateState(state)) {
-    return c.json({ error: "Invalid or expired state parameter" }, 400);
-  }
-
-  try {
-    const { tokens, user, resources } = await handleOAuthCallback(code);
-
-    if (!tokens.refresh_token) {
-      return c.json(
-        {
-          error: "Failed to complete OAuth flow",
-          details: "No refresh token received from Atlassian",
-        },
-        500
-      );
-    }
-
-    storeUserTokens(
-      user.account_id,
-      tokens.access_token,
-      tokens.refresh_token,
-      tokens.expires_in,
-      user,
-      resources
-    );
-
-    completeState(state, user.account_id);
-
-    const htmlPath = join(__dirname, "../templates/auth-success.html");
-    const html = readFileSync(htmlPath, "utf-8");
-
-    return c.html(html);
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error occurred";
-
-    console.error("OAuth callback error:", errorMessage);
-
-    return c.json(
-      {
-        error: "Failed to complete OAuth flow",
-        details: errorMessage,
-      },
-      500
-    );
-  }
-});
 
 authRouter.get("/status/:state", async (c) => {
   const state = c.req.param("state");

@@ -1,4 +1,4 @@
-import type { MCPTool } from "../services/mcp-client.js";
+import type { MCPTool } from "../services/mcp/mcp-client.js";
 
 export function convertMCPToolsToOpenAI(mcpTools: MCPTool[]): Array<{
   type: "function";

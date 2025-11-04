@@ -1,45 +1,89 @@
 # CLI Integration Guide for Kay Backend
 
-Complete guide for integrating the CLI with Kay Backend authentication system.
+Complete guide for integrating the CLI with Kay Backend service connection
+system.
 
 ## Overview
 
-The Kay Backend uses a **session token + refresh token** authentication system:
+The Kay Backend uses a **service connection** model where users connect
+third-party services (Jira, Confluence, etc.) individually. The system uses:
 
 - **Session Token:** JWT that expires in 30 minutes (short-lived for security)
 - **Refresh Token:** Random hex string that expires in 7 days (max 30 days)
+- **Session ID (kay_session_id):** Persistent identifier stored locally (not
+  deleted until CLI uninstall)
 
-## Authentication Flow
+## Service Connection Flow
 
-### Step 1: Initiate Login
+### Step 1: Connect First Service (New Installation)
 
-**Endpoint:** `GET /auth/login`
+**Endpoint:** `POST /connections/connect?service=jira`
 
-```bash
-curl http://localhost:4000/auth/login
+**Request:**
+
+```json
+{}
+```
+
+Or with existing `session_id`:
+
+```json
+{
+  "session_id": "kaysession_1234567890_abc123"
+}
 ```
 
 **Response:**
 
 ```json
 {
-  "message": "Please visit the URL below to authorize",
+  "service": "jira",
+  "session_id": "kaysession_1234567890_abc123",
   "authorization_url": "https://auth.atlassian.com/authorize?...",
-  "state": "abc123def456..."
+  "state": "abc123def456...",
+  "message": "Please visit the authorization URL to connect jira"
+}
+```
+
+**Response (with auto-recovery):**
+
+If the provided `session_id` is invalid (e.g., database was reset, session
+deleted), the backend automatically creates a new session:
+
+```json
+{
+  "service": "jira",
+  "session_id": "kaysession_9876543210_xyz789",
+  "authorization_url": "https://auth.atlassian.com/authorize?...",
+  "state": "abc123def456...",
+  "message": "New session created. Please visit the authorization URL to connect jira",
+  "session_reset": true
 }
 ```
 
 **Actions:**
 
-1. Extract `authorization_url` and `state`
-2. Open `authorization_url` in user's browser
-3. Display "Waiting for authorization..." message
+1. **Check for `session_reset` flag**: If `session_reset: true` is present, the
+   backend created a new session because the old one was invalid
+2. **Update stored `session_id`**: Always update your local `session_id` with
+   the value returned in the response
+3. **Store `session_id` (kay_session_id) locally (persistent)**
+4. **Extract `authorization_url` and `state`**
+5. **Open `authorization_url` in user's browser**
+6. **Display "Waiting for authorization..." message**
+   - If `session_reset: true`, optionally show: "⚠️ Session was reset. New
+     session created."
 
-### Step 2: Poll for Completion
+**Note:** If `session_id` is not provided, backend creates a new one and returns
+it. The backend also automatically recovers from invalid session IDs by creating
+new ones.
+
+### Step 2: Poll for Completion (First Service Only)
 
 **Endpoint:** `GET /auth/status/:state`
 
-Poll every 2-3 seconds until completion.
+Poll every 2-3 seconds until completion. **Only needed for first service
+connection.**
 
 **Pending Response:**
 
@@ -68,7 +112,102 @@ Poll every 2-3 seconds until completion.
 2. Store `account_id` for reference
 3. Stop polling
 
-### Step 3: Token Refresh (When Session Expires)
+### Step 3: Connect Additional Services
+
+**Endpoint:** `POST /connections/connect?service=confluence`
+
+**Request:**
+
+```json
+{
+  "session_id": "kaysession_1234567890_abc123"
+}
+```
+
+**Response:**
+
+```json
+{
+  "service": "confluence",
+  "session_id": "kaysession_1234567890_abc123",
+  "authorization_url": "https://auth.atlassian.com/authorize?...",
+  "state": "xyz789ghi456...",
+  "message": "Please visit the authorization URL to connect confluence"
+}
+```
+
+**Actions:**
+
+1. **Check for `session_reset` flag**: If present, update your stored
+   `session_id`
+2. Open `authorization_url` in user's browser
+3. User authorizes
+4. **No polling needed** - service is connected automatically
+5. CLI already has `session_token` and `refresh_token` from first connection
+
+### Step 4: Check Connection Status
+
+**Endpoint:** `GET /connections?session_id={kay_session_id}`
+
+**Request:**
+
+```
+GET /connections?session_id=kaysession_1234567890_abc123
+```
+
+**Response:**
+
+```json
+{
+  "connections": {
+    "kyg": false,
+    "jira": true,
+    "confluence": true,
+    "bitbucket": false
+  }
+}
+```
+
+**Error Response (Invalid session_id):**
+
+```json
+{
+  "error": "Invalid session_id",
+  "message": "The provided session_id no longer exists. Please reconnect your services.",
+  "session_reset_required": true
+}
+```
+
+**Actions on Error:**
+
+1. Clear the stored `session_id` from local config
+2. Prompt user to reconnect services: "Your session has expired. Please
+   reconnect your services."
+3. Call `/connections/connect` without a `session_id` to create a new session
+
+### Step 5: Disconnect a Service
+
+**Endpoint:** `POST /connections/disconnect?service=jira`
+
+**Request:**
+
+```json
+{
+  "session_id": "kaysession_1234567890_abc123"
+}
+```
+
+**Response:**
+
+```json
+{
+  "service": "jira",
+  "connected": false,
+  "message": "Successfully disconnected from jira"
+}
+```
+
+### Step 6: Token Refresh (When Session Expires)
 
 **Endpoint:** `POST /auth/refresh`
 
@@ -145,53 +284,32 @@ Authorization: Bearer {token}
 
 ### TypeScript Types
 
-```typescript
-export interface LoginResponse {
-  message: string;
-  authorization_url: string;
-  state: string;
-}
+export interface ConnectServiceResponse { service: string; session_id: string;
+authorization_url: string; state: string; message: string; session_reset?:
+boolean; }
 
-export interface StatusPendingResponse {
-  status: "pending";
-  message: string;
-}
+export interface ConnectionStatusResponse { connections: { kyg: boolean; jira:
+boolean; confluence: boolean; bitbucket: boolean; }; }
 
-export interface StatusCompletedResponse {
-  status: "completed";
-  account_id: string;
-  token: string;
-  refresh_token: string;
-  message: string;
-}
+export interface ConnectionStatusError { error: string; message: string;
+session_reset_required: boolean; }
+
+export interface StatusPendingResponse { status: "pending"; message: string; }
+
+export interface StatusCompletedResponse { status: "completed"; account_id:
+string; token: string; refresh_token: string; message: string; }
 
 export type StatusResponse = StatusPendingResponse | StatusCompletedResponse;
 
-export interface RefreshTokenResponse {
-  token: string;
-  refresh_token: string;
-  message: string;
-}
+export interface RefreshTokenResponse { token: string; refresh_token: string;
+message: string; }
 
-export interface MeResponse {
-  message: string;
-  data: {
-    account_id: string;
-    name: string;
-    email: string;
-    picture: string;
-    account_type: string;
-    account_status: string;
-    resources: Array<{
-      id: string;
-      url: string;
-      name: string;
-      scopes: string[];
-      avatarUrl: string;
-    }>;
-  };
-}
-```
+export interface MeResponse { message: string; data: { account_id: string; name:
+string; email: string; picture: string; account_type: string; account_status:
+string; resources: Array<{ id: string; url: string; name: string; scopes:
+string[]; avatarUrl: string; }>; }; }
+
+````
 
 ### Complete Implementation Example
 
@@ -200,31 +318,112 @@ class KayAuth {
   private config: Config;
   private baseUrl = "http://localhost:4000";
 
-  async login(): Promise<void> {
-    // Step 1: Get authorization URL
-    const loginResponse = await fetch(`${this.baseUrl}/auth/login`);
-    const { authorization_url, state } = await loginResponse.json();
+  async connectService(
+    service: "jira" | "confluence" | "bitbucket"
+  ): Promise<void> {
+    // Step 1: Get or create session_id
+    let sessionId = this.config.get("session_id");
+    const isFirstConnection = !sessionId;
 
-    // Step 2: Open browser
+    // Step 2: Get authorization URL
+    const body = sessionId ? { session_id: sessionId } : {};
+    const connectResponse = await fetch(
+      `${this.baseUrl}/connections/connect?service=${service}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    const response = await connectResponse.json() as ConnectServiceResponse;
+    const { authorization_url, state, session_id, session_reset } = response;
+
+    // Step 3: Store session_id (persistent)
+    // Always update session_id from response (handles auto-recovery)
+    if (session_id) {
+      const oldSessionId = this.config.get("session_id");
+      this.config.set("session_id", session_id);
+
+      // Notify user if session was reset
+      if (session_reset) {
+        console.warn(
+          "⚠️  Session was reset. Your old session_id is no longer valid. " +
+          "A new session has been created and saved."
+        );
+      }
+    }
+
+    // Step 4: Open browser
     openBrowser(authorization_url);
 
-    // Step 3: Poll for completion
-    while (true) {
-      const statusResponse = await fetch(
-        `${this.baseUrl}/auth/status/${state}`
-      );
-      const status = await statusResponse.json();
+    // Step 5: Poll for completion (only for first connection)
+    if (isFirstConnection) {
+      while (true) {
+        const statusResponse = await fetch(
+          `${this.baseUrl}/auth/status/${state}`
+        );
+        const status = await statusResponse.json();
 
-      if (status.status === "completed") {
-        // Store both tokens
-        this.config.set("token", status.token);
-        this.config.set("refresh_token", status.refresh_token);
-        this.config.set("account_id", status.account_id);
-        break;
+        if (status.status === "completed") {
+          // Store tokens (only on first connection)
+          this.config.set("token", status.token);
+          this.config.set("refresh_token", status.refresh_token);
+          this.config.set("account_id", status.account_id);
+          break;
+        }
+
+        await sleep(2000);
       }
-
-      await sleep(2000);
+    } else {
+      // For subsequent connections, just wait a moment for callback to complete
+      await sleep(3000);
     }
+  }
+
+  async getConnectionStatus(): Promise<Record<string, boolean>> {
+    const sessionId = this.config.get("session_id");
+    if (!sessionId) {
+      return {
+        kyg: false,
+        jira: false,
+        confluence: false,
+        bitbucket: false,
+      };
+    }
+
+    const response = await fetch(
+      `${this.baseUrl}/connections?session_id=${sessionId}`
+    );
+
+    if (!response.ok) {
+      const error = await response.json() as ConnectionStatusError;
+      if (error.session_reset_required) {
+        // Clear invalid session_id
+        this.config.delete("session_id");
+        throw new Error(
+          "Session expired. Please reconnect your services using: kay connect <service>"
+        );
+      }
+      throw new Error(error.message || "Failed to get connection status");
+    }
+
+    const { connections } = await response.json() as ConnectionStatusResponse;
+    return connections;
+  }
+
+  async disconnectService(
+    service: "jira" | "confluence" | "bitbucket"
+  ): Promise<void> {
+    const sessionId = this.config.get("session_id");
+    if (!sessionId) {
+      throw new Error("No session found. Please connect a service first.");
+    }
+
+    await fetch(`${this.baseUrl}/connections/disconnect?service=${service}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
   }
 
   async refreshToken(): Promise<boolean> {
@@ -285,7 +484,7 @@ class KayAuth {
     return response;
   }
 }
-```
+````
 
 ## Token Management
 
@@ -303,12 +502,21 @@ class KayAuth {
 
 ```json
 {
+  "session_id": "kaysession_1234567890_abc123",
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "refresh_token": "a1b2c3d4e5f6...",
   "account_id": "557058:abc123-def456-ghi789",
   "expires_at": 1709876543000
 }
 ```
+
+**Important:**
+
+- `session_id` (kay_session_id) is persistent - store it locally and reuse it
+  for all service connections
+- `session_id` is only deleted when CLI is uninstalled
+- `token` and `refresh_token` are refreshed periodically
+- `account_id` is set on first service connection
 
 **Security best practices:**
 
@@ -393,14 +601,18 @@ function clearTokens(): void {
 
 ## Token Lifecycle
 
-1. **Initial Login** → Receive `token` (30 minutes) + `refresh_token` (7 days,
-   max 30 days)
-2. **Storage** → Save both tokens securely to local config file
+1. **First Service Connection** → Receive `session_id` (persistent), `token` (30
+   minutes) + `refresh_token` (7 days, max 30 days)
+2. **Storage** → Save `session_id`, `token`, and `refresh_token` securely to
+   local config file
 3. **API Requests** → Use `token` in `Authorization: Bearer {token}` header
 4. **Token Expires** → Receive 401 Unauthorized (happens every ~30 minutes)
 5. **Auto-Refresh** → Call `/auth/refresh` with `refresh_token` → Get new tokens
 6. **Token Rotation** → Save new `refresh_token` (old one is invalidated)
-7. **Refresh Token Expires** → User must re-authenticate via `/auth/login`
+7. **Refresh Token Expires** → User must reconnect a service (which will create
+   new tokens)
+8. **Additional Services** → Use stored `session_id` to connect more services
+   (no new tokens needed)
 
 ## Error Handling
 
@@ -420,8 +632,132 @@ function clearTokens(): void {
 - Server error during OAuth flow
 - **Action:** Display error, suggest retrying
 
+## Auto-Recovery for Invalid Session IDs
+
+The backend automatically handles invalid `session_id` values to provide a
+seamless experience:
+
+### Endpoints That Handle Invalid Session IDs
+
+#### 1. `POST /connections/connect?service={service}` ⚡ **Auto-Recovery**
+
+**Behavior:** Automatically creates a new session if the provided `session_id`
+is invalid.
+
+**Response with Auto-Recovery:**
+
+```json
+{
+  "service": "jira",
+  "session_id": "kaysession_NEW_SESSION_ID",
+  "authorization_url": "https://auth.atlassian.com/authorize?...",
+  "state": "abc123...",
+  "message": "New session created. Please visit the authorization URL to connect jira",
+  "session_reset": true
+}
+```
+
+**CLI Action:** Always update your stored `session_id` with the value returned
+in the response.
+
+#### 2. `GET /connections?session_id={session_id}` ❌ **Error Response**
+
+**Behavior:** Returns an error if the `session_id` is invalid (does not
+auto-recover).
+
+**Error Response:**
+
+```json
+{
+  "error": "Invalid session_id",
+  "message": "The provided session_id no longer exists. Please reconnect your services.",
+  "session_reset_required": true
+}
+```
+
+**CLI Action:**
+
+1. Clear the stored `session_id` from local config
+2. Prompt user to reconnect services
+3. Call `/connections/connect` without a `session_id` to create a new session
+
+#### 3. `POST /connections/disconnect?service={service}` ❌ **Error Response**
+
+**Behavior:** Returns an error if the `session_id` is invalid (does not
+auto-recover).
+
+**Error Response:**
+
+```json
+{
+  "error": "Invalid session_id",
+  "message": "The provided session_id no longer exists. Please reconnect your services.",
+  "session_reset_required": true
+}
+```
+
+**CLI Action:** Same as above - clear session_id and prompt user to reconnect.
+
+### How It Works
+
+1. **Automatic Recovery** (Connect Endpoint Only): When you call
+   `/connections/connect` with an invalid `session_id`, the backend
+   automatically creates a new session instead of returning an error.
+
+2. **Session Reset Flag**: The response includes `session_reset: true` when a
+   new session was created due to an invalid one.
+
+3. **Always Update Session ID**: Always update your stored `session_id` with the
+   value returned in the response, even if you didn't expect it to change.
+
+### When Sessions Become Invalid
+
+- Database was reset or deleted
+- Session was manually deleted from the database
+- Session expired (though this is rare, as sessions are persistent)
+- Database corruption or migration issues
+
+### Implementation Best Practices
+
+```typescript
+// Always check for session_reset flag
+const response = await connectService(service);
+
+if (response.session_reset) {
+  // Update stored session_id
+  config.set("session_id", response.session_id);
+  // Optionally notify user
+  console.warn("Session was reset. New session created.");
+}
+
+// Always update session_id from response
+// This ensures you have the latest valid session
+config.set("session_id", response.session_id);
+```
+
+### Error Handling
+
+If you receive an error with `session_reset_required: true` (e.g., from
+`/connections` endpoint):
+
+1. Clear the stored `session_id` from local config
+2. Prompt user to reconnect: "Your session has expired. Please reconnect your
+   services."
+3. Call `/connections/connect` without a `session_id` to create a new session
+
 ## Important Notes
 
+- **No separate login endpoint** - Authentication happens through service
+  connections
+- **First service connection** creates user account and session tokens
+- **Subsequent service connections** use existing `session_id` and don't require
+  polling
+- **Session ID (kay_session_id)** is persistent - store it locally and reuse for
+  all service connections
+- **Auto-recovery** - Backend automatically creates new sessions if the provided
+  one is invalid
+- **Always update session_id** - Always save the `session_id` returned from
+  `/connections/connect`, even if it matches what you sent
 - **Session tokens expire in 30 minutes** - Much shorter than typical auth
   systems, so auto-refresh is critical
 - **Refresh tokens last 7 days** (max 30 days) - Ensures users don't need to
@@ -430,13 +766,15 @@ function clearTokens(): void {
   should happen transparently
 - **Token rotation** - Each refresh returns a new refresh_token; always save it
   to replace the old one
-- **Store both tokens securely** - Session token AND refresh token must be saved
+- **Store session_id, token, and refresh_token securely** - All three must be
+  saved
 - **File permissions** - Set config file to `600` (owner read/write only) for
   security
 - **Never commit tokens** - Add config file to `.gitignore`
 - **Proactive refresh** - Consider refreshing tokens before they expire (e.g., 5
   minutes before)
-- **State expires in 10 minutes** - If user takes too long, restart login flow
+- **State expires in 10 minutes** - If user takes too long, restart connection
+  flow
 
 ## Ask Endpoint
 
@@ -716,21 +1054,28 @@ export interface ConfirmationRequest {
 
 ## Checklist
 
-- [ ] Call `GET /auth/login` and parse JSON response
+- [ ] Implement `POST /connections/connect?service={service}` endpoint call
+- [ ] Store `session_id` (kay_session_id) persistently in local config
 - [ ] Extract `authorization_url` and `state` from response
 - [ ] Open `authorization_url` in user's browser
 - [ ] Display "Waiting for authorization..." message
-- [ ] Poll `GET /auth/status/:state` every 2-3 seconds
+- [ ] For first connection: Poll `GET /auth/status/:state` every 2-3 seconds
 - [ ] Handle pending status (continue polling)
-- [ ] Handle completed status (save both tokens, stop polling)
-- [ ] Store both `token` and `refresh_token` securely
+- [ ] Handle completed status (save `session_id`, `token`, `refresh_token`, stop
+      polling)
+- [ ] For subsequent connections: Use existing `session_id`, no polling needed
+- [ ] Store `session_id`, `token`, and `refresh_token` securely
+- [ ] Implement `GET /connections?session_id={session_id}` to check status
+- [ ] Implement `POST /connections/disconnect?service={service}` to disconnect
 - [ ] Implement `POST /auth/refresh` endpoint call
 - [ ] Add automatic token refresh in API request handler (on 401)
-- [ ] Update TypeScript types to include `refresh_token`
-- [ ] Handle refresh token expiration (prompt user to re-login)
+- [ ] Update TypeScript types to include `session_id` and `refresh_token`
+- [ ] Handle refresh token expiration (prompt user to reconnect a service)
 - [ ] Implement `POST /ask` endpoint with all three modes
 - [ ] Implement `POST /ask/confirm` for confirmation flow
 - [ ] Handle interactive session management (store `session_id`)
+- [ ] Test first service connection flow
+- [ ] Test additional service connection flow
 - [ ] Test one-shot requests
 - [ ] Test confirmation flow
 - [ ] Test interactive conversation with multiple turns
