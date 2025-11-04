@@ -1,0 +1,67 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model KaySession {
+  id           String      @id
+  deviceInfo   String?     @map("device_info")
+  refreshToken String?     @map("refresh_token")
+  expiresAt    DateTime?   @map("expires_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  connections  Connection[]
+  chats        Chat[]
+
+  @@map("kay_sessions")
+}
+
+model Connection {
+  id           String      @id
+  kaySessionId String      @map("kay_session_id")
+  serviceName  String      @map("service_name")
+  accessToken  String      @map("access_token")
+  refreshToken String?     @map("refresh_token")
+  expiresAt    DateTime?   @map("expires_at")
+  metadata     Json?
+  status       String      @default("active")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  kaySession   KaySession  @relation(fields: [kaySessionId], references: [id], onDelete: Cascade)
+
+  @@unique([kaySessionId, serviceName])
+  @@map("connections")
+}
+
+model Chat {
+  id           String      @id @default(uuid())
+  kaySessionId String      @map("kay_session_id")
+  role         String      // "user" | "assistant" | "system"
+  content      String
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  kaySession   KaySession  @relation(fields: [kaySessionId], references: [id], onDelete: Cascade)
+
+  @@map("chats")
+}
+
+model OAuthState {
+  state        String      @id
+  kaySessionId String?     @map("kay_session_id")
+  serviceName  String?     @map("service_name")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  expiresAt    DateTime    @map("expires_at")
+
+  @@map("oauth_states")
+  @@index([expiresAt])
+}
+

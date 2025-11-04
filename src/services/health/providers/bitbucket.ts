@@ -3,6 +3,7 @@ import {
   getConnection,
 } from "../../../services/connections/connection-service.js";
 import type { HealthReport } from "../../../types/health.js";
+import { ServiceName } from "../../../types/connections.js";
 
 export async function checkBitbucket(c: any, health: HealthReport) {
   const sessionId = c.req.query("session_id") as string | undefined;
@@ -30,7 +31,7 @@ export async function checkBitbucket(c: any, health: HealthReport) {
     return;
   }
 
-  const connection = getConnection(sessionId, "bitbucket");
+  const connection = getConnection(sessionId, ServiceName.BITBUCKET);
   if (!connection) {
     health.services.mcp_bitbucket = {
       status: "unhealthy",

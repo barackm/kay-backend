@@ -1,4 +1,9 @@
-export type ServiceName = "jira" | "confluence" | "bitbucket" | "kyg";
+export enum ServiceName {
+  JIRA = "jira",
+  CONFLUENCE = "confluence",
+  BITBUCKET = "bitbucket",
+  KYG = "kyg",
+}
 
 export interface ConnectionMetadata {
   account_id?: string;
@@ -41,9 +46,8 @@ export interface ServiceConnectionInfo {
 }
 
 export interface ConnectionStatus {
-  kyg: ServiceConnectionInfo;
-  jira: ServiceConnectionInfo;
-  confluence: ServiceConnectionInfo;
-  bitbucket: ServiceConnectionInfo;
+  [ServiceName.KYG]: ServiceConnectionInfo;
+  [ServiceName.JIRA]: ServiceConnectionInfo;
+  [ServiceName.CONFLUENCE]: ServiceConnectionInfo;
+  [ServiceName.BITBUCKET]: ServiceConnectionInfo;
 }
-

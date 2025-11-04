@@ -1,7 +1,6 @@
 import type { Context, Next } from "hono";
 import { verifyCliSessionToken } from "../services/auth/auth.js";
 import { getCliSessionByToken } from "../services/database/db-store.js";
-import { getKaySessionIdByToken } from "../services/connections/connection-service.js";
 import { ErrorCode, type ErrorResponse } from "../types/errors.js";
 
 export function authMiddleware() {
@@ -25,7 +24,7 @@ export function authMiddleware() {
       // Verify token and extract payload
       const payload = verifyCliSessionToken(sessionToken);
 
-      const session = getCliSessionByToken(sessionToken);
+      const session = await getCliSessionByToken(sessionToken);
 
       if (!session) {
         return c.json<ErrorResponse>(

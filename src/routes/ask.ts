@@ -29,7 +29,6 @@ askRouter.post("/ask", authMiddleware(), async (c) => {
 
     return c.json<AskResponse>(response);
   } catch (error) {
-    console.error("[ask] Error processing request:", error);
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
 

@@ -1,7 +1,5 @@
-import {
-  getKaySessionIdByToken,
-  getConnectionStatus,
-} from "../connections/connection-service.js";
+import { getConnectionStatus } from "../connections/connection-service.js";
+import { ServiceName } from "../../types/connections.js";
 
 export interface Tool {
   name: string;
@@ -33,19 +31,24 @@ export function getKayConnectionStatusTool(): Tool {
 }
 
 export async function executeKayConnectionStatus(
-  sessionToken: string,
+  _sessionToken: string,
   args: { session_id?: string }
 ): Promise<{ connected: string[]; disconnected: string[] }> {
-  const kaySessionId = args.session_id || getKaySessionIdByToken(sessionToken);
+  const kaySessionId = args.session_id;
 
   if (!kaySessionId) {
     return {
       connected: [],
-      disconnected: ["kyg", "jira", "confluence", "bitbucket"],
+      disconnected: [
+        ServiceName.KYG,
+        ServiceName.JIRA,
+        ServiceName.CONFLUENCE,
+        ServiceName.BITBUCKET,
+      ],
     };
   }
 
-  const status = getConnectionStatus(kaySessionId);
+  const status = await getConnectionStatus(kaySessionId);
 
   const connected: string[] = [];
   const disconnected: string[] = [];

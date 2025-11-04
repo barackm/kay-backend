@@ -2,16 +2,12 @@ import type { AskRequest, AskResponse } from "../../types/ask.js";
 import {
   createChatCompletion,
   isOpenAIConfigured,
-  type ChatMessage,
+  type ChatMessage as OpenAIChatMessage,
 } from "./openai-service.js";
-import {
-  storeInteractiveSession as dbStoreInteractiveSession,
-  getInteractiveSession as dbGetInteractiveSession,
-  updateInteractiveSessionHistory,
-} from "./ask-store.js";
+import { addChatMessage, getChatHistory } from "./ask-store.js";
 
 export interface AskServiceContext {
-  accountId: string;
+  accountId: string; // This is kaySessionId
   request: AskRequest;
 }
 
@@ -35,13 +31,9 @@ export class AskService {
       };
     }
 
-    // Interactive mode: multi-turn conversation
+    // Interactive mode: multi-turn conversation (uses kaySessionId from context)
     if (request.interactive) {
-      if (request.session_id) {
-        return this.handleInteractiveTurn(context);
-      } else {
-        return this.startInteractiveSession(context);
-      }
+      return this.handleInteractiveTurn(context);
     }
 
     // One-shot mode: single request/response
@@ -52,7 +44,7 @@ export class AskService {
     context: AskServiceContext
   ): Promise<AskResponse> {
     try {
-      const messages: ChatMessage[] = [
+      const messages: OpenAIChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: context.request.prompt },
       ];
@@ -78,49 +70,24 @@ export class AskService {
     }
   }
 
-  private async startInteractiveSession(
-    context: AskServiceContext
-  ): Promise<AskResponse> {
-    const sessionId = this.generateSessionId();
-
-    // Store empty session
-    dbStoreInteractiveSession(sessionId, context.accountId, context, []);
-
-    // Process first turn
-    const response = await this.processInteractiveTurn(sessionId, context, []);
-
-    return {
-      status: "interactive_response",
-      session_id: sessionId,
-      interactive: true,
-      message: response.message,
-      data: response.data,
-    };
-  }
-
   private async handleInteractiveTurn(
     context: AskServiceContext
   ): Promise<AskResponse> {
-    const sessionId = context.request.session_id!;
+    const kaySessionId = context.accountId;
 
-    // Try to retrieve existing session for history
-    const session = dbGetInteractiveSession(sessionId);
+    // Get chat history for this kay session
+    const history = await getChatHistory(kaySessionId, 50);
 
-    if (!session) {
-      // Session not found, start a new one
-      return this.startInteractiveSession(context);
-    }
-
-    // Process with existing history
+    // Process the turn
     const response = await this.processInteractiveTurn(
-      sessionId,
+      kaySessionId,
       context,
-      session.history
+      history
     );
 
     return {
       status: "interactive_response",
-      session_id: sessionId,
+      session_id: kaySessionId, // Return kaySessionId as session_id for backward compatibility
       interactive: true,
       message: response.message,
       data: response.data,
@@ -128,12 +95,15 @@ export class AskService {
   }
 
   private async processInteractiveTurn(
-    sessionId: string,
+    kaySessionId: string,
     context: AskServiceContext,
     history: Array<{ role: string; content: string }>
   ): Promise<{ message: string; data?: unknown }> {
     try {
-      const messages: ChatMessage[] = [
+      // Add user message to chat history
+      await addChatMessage(kaySessionId, "user", context.request.prompt);
+
+      const messages: OpenAIChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
         ...history.map((msg) => ({
           role: msg.role as "user" | "assistant",
@@ -147,13 +117,8 @@ export class AskService {
       const assistantMessage =
         result.content || "I'm sorry, I couldn't generate a response.";
 
-      // Update history
-      const updatedHistory = [
-        ...history,
-        { role: "user", content: context.request.prompt },
-        { role: "assistant", content: assistantMessage },
-      ];
-      updateInteractiveSessionHistory(sessionId, updatedHistory);
+      // Add assistant response to chat history
+      await addChatMessage(kaySessionId, "assistant", assistantMessage);
 
       return {
         message: assistantMessage,
@@ -172,9 +137,5 @@ export class AskService {
         },
       };
     }
-  }
-
-  private generateSessionId(): string {
-    return `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   }
 }

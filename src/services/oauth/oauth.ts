@@ -73,10 +73,6 @@ async function fetchAccessibleResources(
   }
 
   const resources = await response.json();
-  console.log(
-    "[OAuth] Fetched accessible resources:",
-    JSON.stringify(resources, null, 2)
-  );
   return resources;
 }
 
@@ -97,11 +93,6 @@ export async function handleOAuthCallback(code: string): Promise<{
     const existing = mergedResources.get(resource.id);
     if (existing) {
       const mergedScopes = new Set([...existing.scopes, ...resource.scopes]);
-      console.log(`[OAuth] Merging resource ${resource.id}:`, {
-        existingScopes: existing.scopes,
-        newScopes: resource.scopes,
-        mergedScopes: Array.from(mergedScopes),
-      });
       mergedResources.set(resource.id, {
         ...existing,
         scopes: Array.from(mergedScopes),
@@ -112,14 +103,6 @@ export async function handleOAuthCallback(code: string): Promise<{
   }
 
   const finalResources = Array.from(mergedResources.values());
-  console.log(
-    "[OAuth] Final merged resources:",
-    finalResources.map((r) => ({
-      id: r.id,
-      name: r.name,
-      scopes: r.scopes,
-    }))
-  );
 
   return {
     tokens,

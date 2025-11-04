@@ -5,12 +5,12 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import {
   validateState,
-  completeState,
   getStateKaySessionId,
   getStateServiceName,
+  removeState,
 } from "../services/connections/state-store.js";
 import { connectAtlassianService } from "../services/connections/connection-service.js";
-import type { ServiceName } from "../types/connections.js";
+import { ServiceName } from "../types/connections.js";
 import {
   getOAuthProvider,
   getServicesByProvider,
@@ -32,11 +32,21 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
     return c.json({ error: "Missing authorization code" }, 400);
   }
 
-  if (!state || !validateState(state)) {
-    return c.json({ error: "Invalid or expired state parameter" }, 400);
+  if (!state) {
+    return c.json({ error: "Missing state parameter" }, 400);
   }
 
-  const serviceName = (service || getStateServiceName(state)) as
+  if (!(await validateState(state))) {
+    return c.json(
+      {
+        error: "Invalid or expired state parameter",
+        details: "State may have expired (10 minutes) or was not found",
+      },
+      400
+    );
+  }
+
+  const serviceName = (service || (await getStateServiceName(state))) as
     | ServiceName
     | undefined;
 
@@ -53,8 +63,8 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
   }
 
   try {
-    const storedKaySessionId = getStateKaySessionId(state);
-    const stateServiceName = getStateServiceName(state);
+    const storedKaySessionId = await getStateKaySessionId(state);
+    const stateServiceName = await getStateServiceName(state);
 
     if (!storedKaySessionId) {
       return c.json(
@@ -62,11 +72,6 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
         400
       );
     }
-
-    console.log(
-      "[OAuth Callback] Retrieved kay_session_id from state:",
-      storedKaySessionId
-    );
 
     if (stateServiceName && stateServiceName !== serviceName) {
       return c.json({ error: "Service mismatch in state parameter" }, 400);
@@ -84,25 +89,23 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
 
     switch (provider) {
       case "atlassian":
-        if (serviceName !== "jira" && serviceName !== "confluence") {
+        if (
+          serviceName !== ServiceName.JIRA &&
+          serviceName !== ServiceName.CONFLUENCE
+        ) {
           return c.json(
             { error: `Service ${serviceName} is not an Atlassian service` },
             400
           );
         }
 
-        console.log(
-          "[OAuth Callback] Calling connectAtlassianService with kay_session_id:",
-          storedKaySessionId
-        );
         const result = await connectAtlassianService(
           storedKaySessionId,
-          serviceName,
-          code
+          code,
+          state
         );
 
         accountId = result.accountId;
-        completeState(state, result.accountId);
         break;
 
       case "bitbucket":

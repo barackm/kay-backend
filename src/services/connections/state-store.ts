@@ -1,98 +1,99 @@
-import db from "../database/database.js";
+import { prisma } from "../../db/client.js";
 
 const STATE_EXPIRY_MS = 10 * 60 * 1000;
 
-export function storeState(
+export async function storeState(
   state: string,
   kaySessionId?: string,
   serviceName?: string
-): void {
-  const now = Date.now();
-  const expiresAt = now + STATE_EXPIRY_MS;
+): Promise<void> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + STATE_EXPIRY_MS);
 
-  db.prepare(
-    `INSERT OR REPLACE INTO oauth_states (state, kay_session_id, service_name, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(state, kaySessionId || null, serviceName || null, now, expiresAt);
+  await prisma.oAuthState.upsert({
+    where: { state },
+    create: {
+      state,
+      kaySessionId: kaySessionId || null,
+      serviceName: serviceName || null,
+      createdAt: now,
+      expiresAt,
+    },
+    update: {
+      kaySessionId: kaySessionId || null,
+      serviceName: serviceName || null,
+      expiresAt,
+    },
+  });
 }
 
-export function getStateKaySessionId(state: string): string | undefined {
-  const now = Date.now();
-  const row = db
-    .prepare(
-      `SELECT kay_session_id, expires_at FROM oauth_states WHERE state = ?`
-    )
-    .get(state) as { kay_session_id: string | null; expires_at: number } | undefined;
+export async function getStateKaySessionId(
+  state: string
+): Promise<string | undefined> {
+  const data = await prisma.oAuthState.findUnique({
+    where: { state },
+  });
 
-  if (!row) {
-    console.log("[getStateKaySessionId] State not found in database:", state);
+  if (!data) {
     return undefined;
   }
 
-  if (now >= row.expires_at) {
-    console.log("[getStateKaySessionId] State expired. Now:", now, "Expires:", row.expires_at);
+  if (Date.now() >= data.expiresAt.getTime()) {
+    await prisma.oAuthState.delete({ where: { state } });
     return undefined;
   }
 
-  console.log("[getStateKaySessionId] Found state with kay_session_id:", row.kay_session_id);
-  return row.kay_session_id || undefined;
+  return data.kaySessionId || undefined;
 }
 
-export function getStateServiceName(state: string): string | undefined {
-  const row = db
-    .prepare(
-      `SELECT service_name FROM oauth_states WHERE state = ? AND expires_at > ?`
-    )
-    .get(state, Date.now()) as { service_name: string | null } | undefined;
+export async function getStateServiceName(
+  state: string
+): Promise<string | undefined> {
+  const data = await prisma.oAuthState.findUnique({
+    where: { state },
+  });
 
-  return row?.service_name || undefined;
+  if (!data || Date.now() >= data.expiresAt.getTime()) {
+    return undefined;
+  }
+
+  return data.serviceName || undefined;
 }
 
-export function validateState(state: string): boolean {
-  const row = db
-    .prepare(`SELECT expires_at FROM oauth_states WHERE state = ?`)
-    .get(state) as { expires_at: number } | undefined;
+export async function validateState(state: string): Promise<boolean> {
+  const data = await prisma.oAuthState.findUnique({
+    where: { state },
+  });
 
-  if (!row) {
+  if (!data) {
     return false;
   }
 
-  return Date.now() < row.expires_at;
+  const isValid = Date.now() < data.expiresAt.getTime();
+  if (!isValid) {
+    await prisma.oAuthState.delete({ where: { state } });
+  }
+
+  return isValid;
 }
 
-export function removeState(state: string): void {
-  db.prepare(`DELETE FROM oauth_states WHERE state = ?`).run(state);
+export async function removeState(state: string): Promise<void> {
+  await prisma.oAuthState.deleteMany({
+    where: { state },
+  });
 }
 
-export function completeState(state: string, accountId: string): void {
-  db.prepare(`UPDATE oauth_states SET account_id = ? WHERE state = ?`).run(
-    accountId,
-    state
-  );
+export async function cleanupExpiredStates(): Promise<void> {
+  const now = new Date();
+  await prisma.oAuthState.deleteMany({
+    where: {
+      expiresAt: {
+        lt: now,
+      },
+    },
+  });
 }
 
-export function getStateAccountId(state: string): string | undefined {
-  const row = db
-    .prepare(
-      `SELECT account_id FROM oauth_states WHERE state = ? AND expires_at > ?`
-    )
-    .get(state, Date.now()) as { account_id: string | null } | undefined;
-
-  return row?.account_id || undefined;
-}
-
-export function isStateComplete(state: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT account_id FROM oauth_states WHERE state = ? AND expires_at > ?`
-    )
-    .get(state, Date.now()) as { account_id: string | null } | undefined;
-
-  return !!row?.account_id;
-}
-
-export function cleanupExpiredStates(): void {
-  db.prepare(`DELETE FROM oauth_states WHERE expires_at < ?`).run(Date.now());
-}
-
-setInterval(cleanupExpiredStates, 5 * 60 * 1000);
+setInterval(() => {
+  cleanupExpiredStates().catch(console.error);
+}, 5 * 60 * 1000);

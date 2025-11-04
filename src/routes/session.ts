@@ -11,14 +11,14 @@ import {
   deleteCliSession,
   deleteCliSessionByRefreshToken,
 } from "../services/database/db-store.js";
-import { ENV } from "../config/env.js";
-import { validateRefreshTokenExpiration } from "../utils/validation.js";
-import { parseDurationToMs } from "../utils/time.js";
-import { ErrorCode, type ErrorResponse } from "../types/errors.js";
 import {
   createKaySession,
   getKaySessionById,
 } from "../services/connections/connection-service.js";
+import { ENV } from "../config/env.js";
+import { validateRefreshTokenExpiration } from "../utils/validation.js";
+import { parseDurationToMs } from "../utils/time.js";
+import { ErrorCode, type ErrorResponse } from "../types/errors.js";
 
 const sessionRouter = new Hono();
 
@@ -39,13 +39,13 @@ sessionRouter.post("/init", async (c) => {
     );
     const sessionExpiresInMs = parseDurationToMs(ENV.CLI_SESSION_EXPIRES_IN);
 
-    const kaySessionId = createKaySession();
-    const kaySession = getKaySessionById(kaySessionId);
+    const kaySessionId = await createKaySession();
+    const kaySession = await getKaySessionById(kaySessionId);
 
     const sessionToken = generateCliSessionToken(kaySessionId);
     const refreshToken = generateRefreshToken();
 
-    storeCliSession(
+    await storeCliSession(
       sessionToken,
       refreshToken,
       null,
@@ -62,11 +62,6 @@ sessionRouter.post("/init", async (c) => {
       expires_at: new Date(expiresAt).toISOString(),
     });
   } catch (error) {
-    console.error("[POST /session/init] Error:", error);
-    console.error(
-      "[POST /session/init] Error stack:",
-      error instanceof Error ? error.stack : "No stack trace"
-    );
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
     return c.json<ErrorResponse>(
@@ -91,7 +86,7 @@ sessionRouter.post("/refresh", async (c) => {
       return c.json({ error: "Missing refresh_token" }, 400);
     }
 
-    const session = getCliSessionByRefreshToken(body.refresh_token);
+    const session = await getCliSessionByRefreshToken(body.refresh_token);
 
     if (!session) {
       return c.json<ErrorResponse>(
@@ -106,7 +101,7 @@ sessionRouter.post("/refresh", async (c) => {
 
     const now = Date.now();
     if (now >= session.expires_at) {
-      deleteCliSessionByRefreshToken(body.refresh_token);
+      await deleteCliSessionByRefreshToken(body.refresh_token);
       return c.json<ErrorResponse>(
         {
           error: ErrorCode.TOKEN_EXPIRED,
@@ -117,30 +112,12 @@ sessionRouter.post("/refresh", async (c) => {
       );
     }
 
-    // Extract kay_session_id from old token to preserve it
-    let kaySessionId: string;
-    try {
-      const oldPayload = verifyCliSessionToken(session.session_token);
-      kaySessionId = oldPayload.kay_session_id;
-      if (!kaySessionId) {
-        throw new Error("Old token missing kay_session_id");
-      }
-    } catch {
-      return c.json<ErrorResponse>(
-        {
-          error: ErrorCode.TOKEN_INVALID,
-          code: ErrorCode.TOKEN_INVALID,
-          message: "Cannot refresh: old token missing kay_session_id",
-        },
-        403
-      );
-    }
-
+    const kaySessionId = session.kaySessionId;
     const newSessionToken = generateCliSessionToken(kaySessionId);
     const sessionExpiresInMs = parseDurationToMs(ENV.CLI_SESSION_EXPIRES_IN);
     const newExpiresAt = now + sessionExpiresInMs;
 
-    updateCliSessionToken(session.session_token, newSessionToken, newExpiresAt);
+    await updateCliSessionToken("", newSessionToken, newExpiresAt);
 
     return c.json({
       session_token: newSessionToken,
@@ -148,11 +125,6 @@ sessionRouter.post("/refresh", async (c) => {
       expires_at: new Date(newExpiresAt).toISOString(),
     });
   } catch (error) {
-    console.error("[POST /session/refresh] Error:", error);
-    console.error(
-      "[POST /session/refresh] Error stack:",
-      error instanceof Error ? error.stack : "No stack trace"
-    );
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
     return c.json<ErrorResponse>(
@@ -186,7 +158,7 @@ sessionRouter.delete("/revoke", async (c) => {
 
     try {
       verifyCliSessionToken(sessionToken);
-      deleteCliSession(sessionToken);
+      await deleteCliSession(sessionToken);
     } catch (error) {
       if (error instanceof Error && error.name === "TokenExpiredError") {
         return c.json<ErrorResponse>(
@@ -210,11 +182,6 @@ sessionRouter.delete("/revoke", async (c) => {
 
     return c.json({ message: "Session revoked successfully" });
   } catch (error) {
-    console.error("[DELETE /session/revoke] Error:", error);
-    console.error(
-      "[DELETE /session/revoke] Error stack:",
-      error instanceof Error ? error.stack : "No stack trace"
-    );
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
     return c.json<ErrorResponse>(

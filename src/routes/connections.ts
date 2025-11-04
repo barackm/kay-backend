@@ -7,8 +7,9 @@ import {
   deleteConnection,
   connectKygService,
   connectBitbucketService,
+  getConnection,
 } from "../services/connections/connection-service.js";
-import type { ServiceName } from "../types/connections.js";
+import { ServiceName } from "../types/connections.js";
 import {
   buildServiceAuthorizationUrl,
   generateOAuthState,
@@ -35,7 +36,7 @@ connectionsRouter.get("/", sessionAuthMiddleware(), async (c) => {
     );
   }
 
-  const kaySession = getKaySessionById(sessionId);
+  const kaySession = await getKaySessionById(sessionId);
   if (!kaySession) {
     return c.json(
       {
@@ -48,7 +49,7 @@ connectionsRouter.get("/", sessionAuthMiddleware(), async (c) => {
     );
   }
 
-  const status = getConnectionStatus(sessionId);
+  const status = await getConnectionStatus(sessionId);
 
   return c.json({
     connections: status,
@@ -61,6 +62,7 @@ connectionsRouter.post("/connect", async (c) => {
     email?: string;
     password?: string;
     api_token?: string;
+    api_key?: string;
   };
   const serviceName = c.req.query("service") as ServiceName | undefined;
 
@@ -69,10 +71,10 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const validServices: ServiceName[] = [
-    "jira",
-    "confluence",
-    "bitbucket",
-    "kyg",
+    ServiceName.JIRA,
+    ServiceName.CONFLUENCE,
+    ServiceName.BITBUCKET,
+    ServiceName.KYG,
   ];
   if (!validServices.includes(serviceName)) {
     return c.json(
@@ -85,31 +87,62 @@ connectionsRouter.post("/connect", async (c) => {
   let sessionCreated = false;
 
   if (!kaySessionId) {
-    kaySessionId = createKaySession();
+    kaySessionId = await createKaySession();
     sessionCreated = true;
   } else {
-    const kaySession = getKaySessionById(kaySessionId);
+    const kaySession = await getKaySessionById(kaySessionId);
     if (!kaySession) {
-      console.log(
-        `[Connect] Invalid session_id provided (${kaySessionId}), creating new session`
-      );
-      kaySessionId = createKaySession();
+      kaySessionId = await createKaySession();
       sessionCreated = true;
     }
   }
 
+  const existingConnection = await getConnection(kaySessionId, serviceName);
+  if (existingConnection) {
+    const metadata = existingConnection.metadata;
+    const response: {
+      service: string;
+      session_id: string;
+      message: string;
+      connected: boolean;
+      account_id?: string;
+    } = {
+      service: serviceName,
+      session_id: kaySessionId,
+      connected: true,
+      message: `${serviceName} is already connected`,
+    };
+
+    if (serviceName === "jira" || serviceName === "confluence") {
+      if (metadata.user_data) {
+        const userData = metadata.user_data as {
+          account_id: string;
+        };
+        response.account_id = userData.account_id;
+      }
+    } else if (serviceName === "bitbucket") {
+      if (metadata.account_id) {
+        response.account_id = metadata.account_id as string;
+      }
+    } else if (serviceName === "kyg") {
+      if (metadata.account_id) {
+        response.account_id = metadata.account_id as string;
+      }
+    }
+
+    return c.json(response);
+  }
+
   const config = getServiceConfig(serviceName);
-  console.log(
-    `[Connect] Service: ${serviceName}, requiresOAuth: ${config.requiresOAuth}, oauthProvider: ${config.oauthProvider}`
-  );
 
   if (!config.requiresOAuth) {
-    if (serviceName === "kyg") {
-      if (!body.email || !body.password) {
+    if (serviceName === ServiceName.KYG) {
+      if (!body.api_key && (!body.email || !body.password)) {
         return c.json(
           {
             error: "Missing required fields for KYG",
-            message: "KYG requires email and password in the request body",
+            message:
+              "KYG requires either api_key or email and password in the request body",
           },
           400
         );
@@ -118,6 +151,7 @@ connectionsRouter.post("/connect", async (c) => {
       try {
         const result = await connectKygService(
           kaySessionId,
+          body.api_key,
           body.email,
           body.password
         );
@@ -153,7 +187,7 @@ connectionsRouter.post("/connect", async (c) => {
       }
     }
 
-    if (serviceName === "bitbucket") {
+    if (serviceName === ServiceName.BITBUCKET) {
       if (!body.email || !body.api_token) {
         return c.json(
           {
@@ -209,7 +243,6 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const oauthProvider = getOAuthProvider(serviceName);
-  console.log(`[Connect] OAuth provider for ${serviceName}: ${oauthProvider}`);
 
   if (!oauthProvider) {
     return c.json(
@@ -219,18 +252,10 @@ connectionsRouter.post("/connect", async (c) => {
   }
 
   const state = generateOAuthState();
-  console.log(`[Connect] Generated OAuth state: ${state.substring(0, 8)}...`);
-  storeState(state, kaySessionId, serviceName);
+  await storeState(state, kaySessionId, serviceName);
 
   try {
-    console.log(`[Connect] Building authorization URL for ${serviceName}...`);
     const authorizationUrl = buildServiceAuthorizationUrl(serviceName, state);
-    console.log(
-      `[Connect] Authorization URL generated: ${authorizationUrl.substring(
-        0,
-        50
-      )}...`
-    );
 
     const response: {
       service: string;
@@ -252,13 +277,6 @@ connectionsRouter.post("/connect", async (c) => {
       response.message = `New session created. Please visit the authorization URL to connect ${serviceName}`;
     }
 
-    console.log(
-      `[Connect] Returning OAuth response for ${serviceName}:`,
-      JSON.stringify({
-        ...response,
-        authorization_url: `${response.authorization_url.substring(0, 50)}...`,
-      })
-    );
     return c.json(response);
   } catch (error) {
     const errorMessage =
@@ -297,7 +315,7 @@ connectionsRouter.post("/disconnect", async (c) => {
     return c.json({ error: "Missing required field: session_id" }, 400);
   }
 
-  const kaySession = getKaySessionById(kaySessionId);
+  const kaySession = await getKaySessionById(kaySessionId);
   if (!kaySession) {
     return c.json(
       {
@@ -310,15 +328,21 @@ connectionsRouter.post("/disconnect", async (c) => {
     );
   }
 
-  const deleted = deleteConnection(kaySessionId, serviceName);
+  const deleted = await deleteConnection(kaySessionId, serviceName);
 
   if (!deleted) {
     return c.json({ error: "Connection not found" }, 404);
   }
 
-  if (serviceName === "jira" || serviceName === "confluence") {
-    const otherService = serviceName === "jira" ? "confluence" : "jira";
-    const otherConnection = deleteConnection(kaySessionId, otherService);
+  if (
+    serviceName === ServiceName.JIRA ||
+    serviceName === ServiceName.CONFLUENCE
+  ) {
+    const otherService =
+      serviceName === ServiceName.JIRA
+        ? ServiceName.CONFLUENCE
+        : ServiceName.JIRA;
+    const otherConnection = await deleteConnection(kaySessionId, otherService);
     if (otherConnection) {
       return c.json({
         service: serviceName,

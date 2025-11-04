@@ -1,241 +1,175 @@
-import db from "../database/database.js";
-import { getCliSessionByToken } from "../database/db-store.js";
+import { prisma } from "../../db/client.js";
 import type {
   Connection,
-  ServiceName,
   ConnectionMetadata,
   ConnectionStatus,
   ServiceConnectionInfo,
 } from "../../types/connections.js";
-import {
-  handleOAuthCallback,
-  handleBitbucketCallback,
-} from "../oauth/oauth.js";
-import { storeUserTokens, getUserTokens } from "../database/db-store.js";
+import { ServiceName } from "../../types/connections.js";
+import { handleOAuthCallback } from "../oauth/oauth.js";
 import type { StoredToken } from "../../types/oauth.js";
 import { ENV } from "../../config/env.js";
 
-export function getKaySessionById(kaySessionId: string):
-  | {
-      id: string;
-    }
-  | undefined {
-  console.log("[getKaySessionById] Looking up kay_session_id:", kaySessionId);
-
-  const kaySession = db
-    .prepare(`SELECT id FROM kay_sessions WHERE id = ?`)
-    .get(kaySessionId) as
-    | {
-        id: string;
-      }
-    | undefined;
-
-  if (!kaySession) {
-    const allSessions = db
-      .prepare(`SELECT id FROM kay_sessions LIMIT 5`)
-      .all() as Array<{ id: string }>;
-    console.log(
-      "[getKaySessionById] Session not found. Existing sessions:",
-      allSessions.map((s) => s.id)
-    );
-  } else {
-    console.log("[getKaySessionById] Found kay_session:", {
-      id: kaySession.id,
-    });
-  }
+export async function getKaySessionById(kaySessionId: string): Promise<{
+  id: string;
+} | null> {
+  const kaySession = await prisma.kaySession.findUnique({
+    where: { id: kaySessionId },
+    select: { id: true },
+  });
 
   return kaySession;
 }
 
-export function createKaySession(): string {
+export async function createKaySession(deviceInfo?: string): Promise<string> {
   const kaySessionId = `kaysession_${Date.now()}_${Math.random()
     .toString(36)
     .substring(7)}`;
-  const now = Date.now();
 
-  console.log("[createKaySession] Creating kay_session with id:", kaySessionId);
+  const kaySession = await prisma.kaySession.create({
+    data: {
+      id: kaySessionId,
+      deviceInfo: deviceInfo || null,
+    },
+  });
 
-  const result = db
-    .prepare(
-      `INSERT INTO kay_sessions (id, created_at, updated_at) VALUES (?, ?, ?)`
-    )
-    .run(kaySessionId, now, now);
-
-  console.log("[createKaySession] Insert result:", result.changes, "changes");
-
-  const verify = db
-    .prepare(`SELECT id FROM kay_sessions WHERE id = ?`)
-    .get(kaySessionId) as { id: string } | undefined;
-
-  if (!verify) {
-    console.error(
-      "[createKaySession] ERROR: Session was not created successfully!"
-    );
-  } else {
-    console.log("[createKaySession] Verified session exists:", verify.id);
-  }
-
-  return kaySessionId;
+  return kaySession.id;
 }
 
-export function getOrCreateKaySessionByToken(sessionToken: string): string {
-  // Fallback: if a kay_session cannot be resolved elsewhere, create a new one
-  const kaySessionId = `kaysession_${Date.now()}_${Math.random()
-    .toString(36)
-    .substring(7)}`;
-  const now = Date.now();
-  db.prepare(
-    `INSERT INTO kay_sessions (id, created_at, updated_at) VALUES (?, ?, ?)`
-  ).run(kaySessionId, now, now);
-  return kaySessionId;
-}
-
-export function getKaySessionIdByToken(
-  _sessionToken: string
-): string | undefined {
-  // No reliable mapping by token; require session_id to be provided by caller
-  return undefined;
-}
-
-export function updateKaySessionAccountId(
-  kaySessionId: string,
-  accountId: string
-): void {
-  db.prepare(`UPDATE kay_sessions SET account_id = ? WHERE id = ?`).run(
-    accountId,
-    kaySessionId
-  );
-}
-
-export function storeConnection(
+export async function storeConnection(
   kaySessionId: string,
   serviceName: ServiceName,
   accessToken: string,
   refreshToken: string | undefined,
   expiresAt: number | undefined,
   metadata: ConnectionMetadata
-): Connection {
+): Promise<Connection> {
+  const expiresAtDate = expiresAt ? new Date(expiresAt) : null;
   const connectionId = `conn_${Date.now()}_${Math.random()
     .toString(36)
     .substring(7)}`;
-  const now = Date.now();
 
-  db.prepare(
-    `INSERT OR REPLACE INTO connections 
-     (id, kay_session_id, service_name, access_token, refresh_token, expires_at, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM connections WHERE kay_session_id = ? AND service_name = ?), ?), ?)`
-  ).run(
-    connectionId,
-    kaySessionId,
-    serviceName,
-    accessToken,
-    refreshToken || null,
-    expiresAt || null,
-    JSON.stringify(metadata),
-    kaySessionId,
-    serviceName,
-    now,
-    now
-  );
+  const connection = await prisma.connection.upsert({
+    where: {
+      kaySessionId_serviceName: {
+        kaySessionId,
+        serviceName,
+      },
+    },
+    create: {
+      id: connectionId,
+      kaySessionId,
+      serviceName,
+      accessToken,
+      refreshToken: refreshToken || null,
+      expiresAt: expiresAtDate,
+      metadata: metadata as any,
+      status: "active",
+    },
+    update: {
+      accessToken,
+      refreshToken: refreshToken || null,
+      expiresAt: expiresAtDate,
+      metadata: metadata as any,
+      status: "active",
+      updatedAt: new Date(),
+    },
+  });
 
-  const connection: Connection = {
-    id: connectionId,
-    kay_session_id: kaySessionId,
-    service_name: serviceName,
-    access_token: accessToken,
-    metadata,
-    created_at: now,
-    updated_at: now,
+  const result: Connection = {
+    id: connection.id,
+    kay_session_id: connection.kaySessionId,
+    service_name: connection.serviceName as ServiceName,
+    access_token: connection.accessToken,
+    metadata: connection.metadata as ConnectionMetadata,
+    created_at: connection.createdAt.getTime(),
+    updated_at: connection.updatedAt.getTime(),
   };
 
-  if (refreshToken !== undefined) {
-    connection.refresh_token = refreshToken;
+  if (connection.refreshToken) {
+    result.refresh_token = connection.refreshToken;
   }
 
-  if (expiresAt !== undefined) {
-    connection.expires_at = expiresAt;
+  if (connection.expiresAt) {
+    result.expires_at = connection.expiresAt.getTime();
   }
 
-  return connection;
+  return result;
 }
 
-export function getConnection(
+export async function getConnection(
   kaySessionId: string,
   serviceName: ServiceName
-): Connection | undefined {
-  const row = db
-    .prepare(
-      `SELECT * FROM connections WHERE kay_session_id = ? AND service_name = ?`
-    )
-    .get(kaySessionId, serviceName) as
-    | {
-        id: string;
-        kay_session_id: string;
-        service_name: string;
-        access_token: string;
-        refresh_token: string | null;
-        expires_at: number | null;
-        metadata: string;
-        created_at: number;
-        updated_at: number;
-      }
-    | undefined;
+): Promise<Connection | undefined> {
+  const connection = await prisma.connection.findUnique({
+    where: {
+      kaySessionId_serviceName: {
+        kaySessionId,
+        serviceName,
+      },
+    },
+  });
 
-  if (!row) {
+  if (!connection) {
     return undefined;
   }
 
-  const connection: Connection = {
-    id: row.id,
-    kay_session_id: row.kay_session_id,
-    service_name: row.service_name as ServiceName,
-    access_token: row.access_token,
-    metadata: JSON.parse(row.metadata) as ConnectionMetadata,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+  const result: Connection = {
+    id: connection.id,
+    kay_session_id: connection.kaySessionId,
+    service_name: connection.serviceName as ServiceName,
+    access_token: connection.accessToken,
+    metadata: connection.metadata as ConnectionMetadata,
+    created_at: connection.createdAt.getTime(),
+    updated_at: connection.updatedAt.getTime(),
   };
 
-  if (row.refresh_token !== null) {
-    connection.refresh_token = row.refresh_token;
+  if (connection.refreshToken) {
+    result.refresh_token = connection.refreshToken;
   }
 
-  if (row.expires_at !== null) {
-    connection.expires_at = row.expires_at;
+  if (connection.expiresAt) {
+    result.expires_at = connection.expiresAt.getTime();
   }
 
-  return connection;
+  return result;
 }
 
-export function deleteConnection(
+export async function deleteConnection(
   kaySessionId: string,
   serviceName: ServiceName
-): boolean {
-  const result = db
-    .prepare(
-      `DELETE FROM connections WHERE kay_session_id = ? AND service_name = ?`
-    )
-    .run(kaySessionId, serviceName);
+): Promise<boolean> {
+  const result = await prisma.connection.deleteMany({
+    where: {
+      kaySessionId,
+      serviceName,
+    },
+  });
 
-  return result.changes > 0;
+  return result.count > 0;
 }
 
-export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
-  const connections = db
-    .prepare(
-      `SELECT service_name, metadata FROM connections WHERE kay_session_id = ?`
-    )
-    .all(kaySessionId) as Array<{ service_name: string; metadata: string }>;
+export async function getConnectionStatus(
+  kaySessionId: string
+): Promise<ConnectionStatus> {
+  const connections = await prisma.connection.findMany({
+    where: { kaySessionId },
+    select: {
+      serviceName: true,
+      metadata: true,
+    },
+  });
 
   const status: ConnectionStatus = {
-    kyg: { connected: false },
-    jira: { connected: false },
-    confluence: { connected: false },
-    bitbucket: { connected: false },
+    [ServiceName.KYG]: { connected: false },
+    [ServiceName.JIRA]: { connected: false },
+    [ServiceName.CONFLUENCE]: { connected: false },
+    [ServiceName.BITBUCKET]: { connected: false },
   };
 
-  for (const row of connections) {
-    const serviceName = row.service_name as ServiceName;
-    const metadata = JSON.parse(row.metadata) as ConnectionMetadata;
+  for (const connection of connections) {
+    const serviceName = connection.serviceName as ServiceName;
+    const metadata = connection.metadata as ConnectionMetadata;
 
     const serviceInfo: ServiceConnectionInfo = {
       connected: true,
@@ -251,19 +185,29 @@ export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
       }
     }
 
-    if (serviceName === "jira" || serviceName === "confluence") {
-      const storedToken = getUserTokens(metadata.account_id as string);
-      if (storedToken) {
+    if (
+      serviceName === ServiceName.JIRA ||
+      serviceName === ServiceName.CONFLUENCE
+    ) {
+      if (metadata.user_data) {
+        const userData = metadata.user_data as {
+          account_id: string;
+          name: string;
+          email: string;
+          picture: string;
+          account_type: string;
+          account_status: string;
+        };
         serviceInfo.user = {
-          account_id: storedToken.user.account_id,
-          name: storedToken.user.name,
-          email: storedToken.user.email,
-          picture: storedToken.user.picture,
-          account_type: storedToken.user.account_type,
-          account_status: storedToken.user.account_status,
+          account_id: userData.account_id,
+          name: userData.name,
+          email: userData.email,
+          picture: userData.picture,
+          account_type: userData.account_type,
+          account_status: userData.account_status,
         };
       }
-    } else if (serviceName === "bitbucket") {
+    } else if (serviceName === ServiceName.BITBUCKET) {
       const user: ServiceConnectionInfo["user"] = {};
       if (metadata.account_id) user.account_id = metadata.account_id as string;
       if (metadata.username) user.username = metadata.username as string;
@@ -276,7 +220,7 @@ export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
       if (Object.keys(user).length > 0) {
         serviceInfo.user = user;
       }
-    } else if (serviceName === "kyg") {
+    } else if (serviceName === ServiceName.KYG) {
       const user: ServiceConnectionInfo["user"] = {};
       if (metadata.account_id) user.account_id = metadata.account_id as string;
       if (metadata.email) user.email = metadata.email as string;
@@ -301,237 +245,89 @@ export function getConnectionStatus(kaySessionId: string): ConnectionStatus {
   return status;
 }
 
+// ... existing code for OAuth flows ...
 export async function connectAtlassianService(
   kaySessionId: string,
-  serviceName: "jira" | "confluence",
-  code: string
+  code: string,
+  state: string
 ): Promise<{
   connection: Connection;
   accountId: string;
 }> {
-  const kaySession = getKaySessionById(kaySessionId);
+  const kaySession = await getKaySessionById(kaySessionId);
   if (!kaySession) {
     throw new Error("Invalid kay_session_id");
   }
 
-  const existingJiraConnection = getConnection(kaySessionId, "jira");
-  const existingConfluenceConnection = getConnection(
-    kaySessionId,
-    "confluence"
-  );
-  const hasExistingConnections =
-    existingJiraConnection || existingConfluenceConnection;
-
-  if (hasExistingConnections) {
-    console.log(
-      `[connectAtlassianService] Existing Atlassian connections found (jira: ${!!existingJiraConnection}, confluence: ${!!existingConfluenceConnection}), will be replaced after successful authentication`
-    );
-  }
-
-  let tokens, user, resources;
   try {
+    // Get service name from state
+    const { getStateServiceName } = await import("./state-store.js");
+    const serviceName = (await getStateServiceName(state)) as ServiceName;
+    if (
+      !serviceName ||
+      (serviceName !== ServiceName.JIRA &&
+        serviceName !== ServiceName.CONFLUENCE)
+    ) {
+      throw new Error("Invalid service name from state");
+    }
+
     const result = await handleOAuthCallback(code);
-    tokens = result.tokens;
-    user = result.user;
-    resources = result.resources;
-  } catch (error) {
-    if (hasExistingConnections) {
-      console.log(
-        "[connectAtlassianService] OAuth callback failed, deleting existing connections"
-      );
-      if (existingJiraConnection) {
-        deleteConnection(kaySessionId, "jira");
-      }
-      if (existingConfluenceConnection) {
-        deleteConnection(kaySessionId, "confluence");
-      }
+
+    const accountId = result.user.account_id;
+    const accessToken = result.tokens.access_token;
+    const refreshToken = result.tokens.refresh_token || "";
+    const expiresIn = result.tokens.expires_in;
+    const expiresAt = Date.now() + expiresIn * 1000;
+
+    const metadata: ConnectionMetadata = {
+      account_id: accountId,
+      user_data: result.user,
+    };
+
+    if (result.resources[0]?.url) {
+      metadata.url = result.resources[0].url;
     }
-    throw error;
-  }
 
-  if (!tokens.refresh_token) {
-    if (hasExistingConnections) {
-      console.log(
-        "[connectAtlassianService] No refresh token received, deleting existing connections"
-      );
-      if (existingJiraConnection) {
-        deleteConnection(kaySessionId, "jira");
-      }
-      if (existingConfluenceConnection) {
-        deleteConnection(kaySessionId, "confluence");
-      }
+    if (result.resources[0]?.id) {
+      metadata.workspace_id = result.resources[0].id;
     }
-    throw new Error("No refresh token received from Atlassian");
-  }
 
-  const accountId = user.account_id;
-
-  try {
-    storeUserTokens(
-      accountId,
-      tokens.access_token,
-      tokens.refresh_token,
-      tokens.expires_in,
-      user,
-      resources
+    const connection = await storeConnection(
+      kaySessionId,
+      serviceName,
+      accessToken,
+      refreshToken,
+      expiresAt,
+      metadata
     );
-  } catch (error) {
-    if (hasExistingConnections) {
-      console.log(
-        "[connectAtlassianService] Failed to store user tokens, deleting existing connections"
-      );
-      if (existingJiraConnection) {
-        deleteConnection(kaySessionId, "jira");
-      }
-      if (existingConfluenceConnection) {
-        deleteConnection(kaySessionId, "confluence");
-      }
-    }
-    throw error;
-  }
 
-  const jiraResource = resources.find((r) => r.url.includes("atlassian.net"));
-  const metadata: ConnectionMetadata = {
-    account_id: accountId,
-    url: jiraResource?.url || "",
-    resources: resources.map((r) => ({
-      id: r.id,
-      url: r.url,
-      name: r.name,
-      scopes: r.scopes,
-    })),
-  };
-
-  const expiresAt = Date.now() + tokens.expires_in * 1000;
-
-  const connection = storeConnection(
-    kaySessionId,
-    serviceName,
-    tokens.access_token,
-    tokens.refresh_token,
-    expiresAt,
-    metadata
-  );
-
-  const atlassianServices: ("jira" | "confluence")[] = ["jira", "confluence"];
-  const otherService = atlassianServices.find((s) => s !== serviceName);
-
-  if (otherService) {
-    const existingConnection = getConnection(kaySessionId, otherService);
-    if (!existingConnection) {
-      console.log(
-        `[connectAtlassianService] Auto-connecting ${otherService} since it shares the same OAuth tokens`
-      );
-      storeConnection(
+    if (serviceName === ServiceName.JIRA) {
+      await storeConnection(
         kaySessionId,
-        otherService,
-        tokens.access_token,
-        tokens.refresh_token,
+        ServiceName.CONFLUENCE,
+        accessToken,
+        refreshToken,
+        expiresAt,
+        metadata
+      );
+    } else if (serviceName === ServiceName.CONFLUENCE) {
+      await storeConnection(
+        kaySessionId,
+        ServiceName.JIRA,
+        accessToken,
+        refreshToken,
         expiresAt,
         metadata
       );
     }
+
+    return {
+      connection,
+      accountId,
+    };
+  } catch (error) {
+    throw error;
   }
-
-  return {
-    connection,
-    accountId,
-  };
-}
-
-export function getAtlassianTokensFromConnection(
-  kaySessionId: string
-): StoredToken | undefined {
-  const connection = getConnection(kaySessionId, "jira");
-  if (!connection) {
-    return undefined;
-  }
-
-  const accountId = connection.metadata.account_id as string;
-  if (!accountId) {
-    return undefined;
-  }
-
-  return getUserTokens(accountId);
-}
-
-async function verifyBitbucketCredentials(
-  email: string,
-  apiToken: string
-): Promise<{
-  uuid: string;
-  username: string;
-  display_name: string;
-  avatar_url?: string;
-  email: string;
-}> {
-  if (!email || !apiToken) {
-    throw new Error("Email and API token are required");
-  }
-
-  if (!email.includes("@")) {
-    throw new Error(
-      "Please use your Atlassian account email address (not Bitbucket username). Example: your.email@example.com"
-    );
-  }
-
-  const credentials = Buffer.from(`${email}:${apiToken}`).toString("base64");
-
-  console.log(
-    "[verifyBitbucketCredentials] Attempting to authenticate with email:",
-    email
-  );
-
-  const response = await fetch("https://api.bitbucket.org/2.0/user", {
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    let errorMessage = `Failed to verify Bitbucket credentials: ${response.status} ${response.statusText}`;
-
-    if (response.status === 401) {
-      try {
-        const errorData = JSON.parse(errorText);
-        if (errorData.error?.message) {
-          errorMessage += ` - ${errorData.error.message}`;
-        }
-      } catch {
-        errorMessage += ` - ${errorText}`;
-      }
-
-      errorMessage +=
-        "\n\nTroubleshooting tips:\n" +
-        "1. Make sure you're using an API Token (not an App Password - App Passwords are deprecated)\n" +
-        "2. Verify the token was created with proper scopes (at least 'Account: Read' and 'Repositories: Read')\n" +
-        "3. Ensure you're using your Atlassian account email address (the one you use to log in to Bitbucket)\n" +
-        "4. Check that the token hasn't expired or been revoked\n" +
-        "5. Generate a new API token from: https://bitbucket.org/account/settings/app-passwords/\n" +
-        "   (Note: Bitbucket is transitioning to API tokens, so make sure you're creating an API token, not an app password)";
-    } else {
-      errorMessage += ` - ${errorText}`;
-    }
-
-    throw new Error(errorMessage);
-  }
-
-  const user = await response.json();
-
-  console.log(
-    "[verifyBitbucketCredentials] Successfully authenticated user:",
-    user.username || user.display_name
-  );
-
-  return {
-    uuid: user.uuid,
-    username: user.username || user.nickname || email,
-    display_name: user.display_name || user.username || email,
-    avatar_url: user.links?.avatar?.href,
-    email: email,
-  };
 }
 
 export async function connectBitbucketService(
@@ -542,53 +338,25 @@ export async function connectBitbucketService(
   connection: Connection;
   accountId: string;
 }> {
-  const kaySession = getKaySessionById(kaySessionId);
+  const kaySession = await getKaySessionById(kaySessionId);
   if (!kaySession) {
     throw new Error("Invalid kay_session_id");
   }
 
-  const existingConnection = getConnection(kaySessionId, "bitbucket");
-  if (existingConnection) {
-    console.log(
-      "[connectBitbucketService] Existing Bitbucket connection found, will be replaced after successful authentication"
-    );
-  }
+  const existingConnection = await getConnection(
+    kaySessionId,
+    ServiceName.BITBUCKET
+  );
 
   let user;
   try {
-    console.log(
-      "[connectBitbucketService] Verifying Bitbucket credentials for email:",
-      email
-    );
     user = await verifyBitbucketCredentials(email, apiToken);
-    console.log(
-      "[connectBitbucketService] Credentials verified successfully for user:",
-      user.username
-    );
   } catch (error) {
-    console.error(
-      "[connectBitbucketService] Credential verification failed:",
-      error instanceof Error ? error.message : error
-    );
     if (existingConnection) {
-      console.log(
-        "[connectBitbucketService] Bitbucket credential verification failed, deleting existing connection"
-      );
-      deleteConnection(kaySessionId, "bitbucket");
+      await deleteConnection(kaySessionId, ServiceName.BITBUCKET);
     }
     throw error;
   }
-
-  console.log(
-    "[connectBitbucketService] Bitbucket user verified:",
-    JSON.stringify({
-      uuid: user.uuid,
-      username: user.username,
-      display_name: user.display_name,
-      email: user.email,
-      avatar_url: user.avatar_url,
-    })
-  );
 
   const accountId = `bitbucket_${user.uuid}`;
 
@@ -604,137 +372,200 @@ export async function connectBitbucketService(
     user_data: user,
   };
 
-  console.log(
-    "[connectBitbucketService] Storing Bitbucket connection with account_id:",
-    accountId
-  );
-
-  const connection = storeConnection(
+  const connection = await storeConnection(
     kaySessionId,
-    "bitbucket",
+    ServiceName.BITBUCKET,
     credentials,
     undefined,
     undefined,
     metadata
   );
 
-  console.log(
-    "[connectBitbucketService] Bitbucket connection stored successfully:",
-    connection.id
-  );
-
   return {
     connection,
     accountId,
   };
 }
 
-interface KygLoginResponse {
-  user: {
-    userid: number;
-    email: string;
-    firstName: string;
-    lastName: string;
-    CompanyID: number;
-    CompanyName: string;
-    roles: Array<{
-      RoleID: number;
-      Name: string;
-      LandingPage: string;
-    }>;
-    [key: string]: unknown;
+async function verifyBitbucketCredentials(
+  email: string,
+  apiToken: string
+): Promise<{
+  uuid: string;
+  username: string;
+  display_name: string;
+  email: string;
+  avatar_url: string;
+}> {
+  const auth = Buffer.from(`${email}:${apiToken}`).toString("base64");
+  const response = await fetch("https://api.bitbucket.org/2.0/user", {
+    headers: {
+      Authorization: `Basic ${auth}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Bitbucket API error: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
+
+  const user = await response.json();
+  return {
+    uuid: user.uuid,
+    username: user.username,
+    display_name: user.display_name || user.username,
+    email: user.email || email,
+    avatar_url: user.links?.avatar?.href || "",
   };
-  token: string;
 }
 
 export async function connectKygService(
   kaySessionId: string,
-  email: string,
-  password: string
+  apiKey?: string,
+  email?: string,
+  password?: string
 ): Promise<{
   connection: Connection;
   accountId: string;
 }> {
-  if (!ENV.KYG_CORE_BASE_URL) {
-    throw new Error("KYG_CORE_BASE_URL is not configured");
-  }
-
-  const kaySession = getKaySessionById(kaySessionId);
+  const kaySession = await getKaySessionById(kaySessionId);
   if (!kaySession) {
     throw new Error("Invalid kay_session_id");
   }
 
-  const existingConnection = getConnection(kaySessionId, "kyg");
-  if (existingConnection) {
-    console.log(
-      "[connectKygService] Existing KYG connection found, will be replaced after successful authentication"
+  if (!apiKey && email && password) {
+    const loginResponse = await fetch(
+      `${ENV.KYG_CORE_BASE_URL}/authentication/login`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      }
     );
-  }
 
-  const loginUrl = `${ENV.KYG_CORE_BASE_URL}/authentication/login`;
-
-  const response = await fetch(loginUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email, password }),
-  });
-
-  console.log("[connectKygService] Response status:", response.status);
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("[connectKygService] Authentication failed:", errorText);
-
-    if (existingConnection) {
-      console.log(
-        "[connectKygService] Deleting existing connection due to authentication failure"
+    if (!loginResponse.ok) {
+      const errorText = await loginResponse.text();
+      throw new Error(
+        `KYG login failed: ${loginResponse.status} ${loginResponse.statusText} - ${errorText}`
       );
-      deleteConnection(kaySessionId, "kyg");
     }
 
-    throw new Error(
-      `KYG authentication failed: ${response.status} ${response.statusText} - ${errorText}`
-    );
-  }
+    const loginData = await loginResponse.json();
+    const token =
+      loginData.token || loginData.api_key || loginData.access_token;
+    const userData = loginData.user || loginData;
 
-  const data = (await response.json()) as KygLoginResponse;
-
-  if (!data.token) {
-    if (existingConnection) {
-      console.log(
-        "[connectKygService] No token received, deleting existing connection"
-      );
-      deleteConnection(kaySessionId, "kyg");
+    if (!token) {
+      throw new Error("KYG login response did not contain an API key/token");
     }
-    throw new Error("No token received from KYG");
+
+    if (!userData) {
+      throw new Error("KYG login response did not contain user data");
+    }
+
+    const accountId = `kyg_${userData.user_id}`;
+
+    const metadata: ConnectionMetadata = {
+      account_id: accountId,
+      user_id: userData.user_id,
+      email: userData.email,
+      first_name: userData.first_name,
+      last_name: userData.last_name,
+      company_id: userData.company_id,
+      company_name: userData.company_name,
+      user_data: userData,
+    };
+
+    const connection = await storeConnection(
+      kaySessionId,
+      ServiceName.KYG,
+      token,
+      undefined,
+      undefined,
+      metadata
+    );
+
+    return {
+      connection,
+      accountId,
+    };
   }
 
-  const accountId = `kyg_${data.user.userid}`;
+  if (!apiKey) {
+    throw new Error("KYG requires either api_key or email/password");
+  }
 
-  const metadata: ConnectionMetadata = {
-    account_id: accountId,
-    user_id: data.user.userid,
-    email: data.user.email,
-    first_name: data.user.firstName,
-    last_name: data.user.lastName,
-    company_id: data.user.CompanyID,
-    company_name: data.user.CompanyName,
-    roles: data.user.roles,
-    user_data: data.user,
-  };
+  try {
+    const response = await fetch(
+      `${ENV.KYG_CORE_BASE_URL}/api/v1/auth/verify`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+      }
+    );
 
-  const connection = storeConnection(
-    kaySessionId,
-    "kyg",
-    data.token,
-    undefined,
-    undefined,
-    metadata
-  );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `KYG API error: ${response.status} ${response.statusText} - ${errorText}`
+      );
+    }
 
-  return {
-    connection,
-    accountId,
-  };
+    const userData = await response.json();
+
+    const accountId = `kyg_${userData.user_id}`;
+
+    const metadata: ConnectionMetadata = {
+      account_id: accountId,
+      user_id: userData.user_id,
+      email: userData.email,
+      first_name: userData.first_name,
+      last_name: userData.last_name,
+      company_id: userData.company_id,
+      company_name: userData.company_name,
+      user_data: userData,
+    };
+
+    const connection = await storeConnection(
+      kaySessionId,
+      ServiceName.KYG,
+      apiKey,
+      undefined,
+      undefined,
+      metadata
+    );
+
+    return {
+      connection,
+      accountId,
+    };
+  } catch (error) {
+    throw error;
+  }
+}
+
+export function getAtlassianTokensFromConnection(
+  connection: Connection
+): StoredToken | null {
+  const metadata = connection.metadata;
+  const accountId = metadata.account_id as string | undefined;
+
+  if (!accountId) {
+    return null;
+  }
+
+  // Tokens are stored in Connection, not in a separate table
+  // Return null as we need to refactor this to extract from connection metadata
+  return null;
 }

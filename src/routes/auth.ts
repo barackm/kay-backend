@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import {
-  deleteUserTokens,
   deleteCliSession,
   getCliSessionByRefreshToken,
   deleteCliSessionByRefreshToken,
@@ -14,11 +13,7 @@ import {
 import { ENV } from "../config/env.js";
 import { validateRefreshTokenExpiration } from "../utils/validation.js";
 import { authMiddleware } from "../middleware/auth.js";
-import {
-  getStateAccountId,
-  isStateComplete,
-  removeState,
-} from "../services/connections/state-store.js";
+import { validateState } from "../services/connections/state-store.js";
 
 const authRouter = new Hono();
 
@@ -29,22 +24,16 @@ authRouter.get("/status/:state", async (c) => {
     return c.json({ error: "Missing state parameter" }, 400);
   }
 
-  if (!isStateComplete(state)) {
+  if (!(await validateState(state))) {
     return c.json({
-      status: "pending",
-      message: "Authorization not yet completed",
+      status: "error",
+      message: "Invalid or expired state parameter",
     });
   }
 
-  const accountId = getStateAccountId(state);
-
-  removeState(state);
-
   return c.json({
-    status: "completed",
-    account_id: accountId,
-    message:
-      "Authorization completed successfully. Use your existing session token for authentication.",
+    status: "pending",
+    message: "Authorization is still in progress. Please wait...",
   });
 });
 
@@ -56,33 +45,22 @@ authRouter.post("/refresh", async (c) => {
     return c.json({ error: "Missing refresh_token" }, 400);
   }
 
-  const session = getCliSessionByRefreshToken(refresh_token);
+  const session = await getCliSessionByRefreshToken(refresh_token);
 
   if (!session || Date.now() > session.expires_at) {
     return c.json({ error: "Invalid or expired refresh token" }, 401);
   }
 
-  // Extract kay_session_id from old token to preserve it
-  let kaySessionId: string;
-  try {
-    const oldPayload = verifyCliSessionToken(session.session_token);
-    kaySessionId = oldPayload.kay_session_id;
-    if (!kaySessionId) {
-      throw new Error("Old token missing kay_session_id");
-    }
-  } catch {
-    return c.json({ error: "Cannot refresh: old token missing kay_session_id" }, 403);
-  }
-
+  const kaySessionId = session.kaySessionId;
   const newSessionToken = generateCliSessionToken(kaySessionId);
   const newRefreshToken = generateRefreshToken();
 
-  deleteCliSessionByRefreshToken(refresh_token);
+  await deleteCliSessionByRefreshToken(refresh_token);
 
   const refreshExpiresInMs = validateRefreshTokenExpiration(
     ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
   );
-  storeCliSession(
+  await storeCliSession(
     newSessionToken,
     newRefreshToken,
     null,
@@ -103,10 +81,6 @@ authRouter.post("/logout", authMiddleware(), (c) => {
 
   if (sessionToken) {
     deleteCliSession(sessionToken);
-  }
-
-  if (accountId) {
-    deleteUserTokens(accountId);
   }
 
   return c.json({

@@ -1,4 +1,4 @@
-import type { ServiceName } from "../../types/connections.js";
+import { ServiceName } from "../../types/connections.js";
 
 export type OAuthProvider = "atlassian" | "bitbucket";
 
@@ -9,23 +9,23 @@ export interface ServiceConfig {
 }
 
 const SERVICE_REGISTRY: Record<ServiceName, ServiceConfig> = {
-  jira: {
-    name: "jira",
+  [ServiceName.JIRA]: {
+    name: ServiceName.JIRA,
     oauthProvider: "atlassian",
     requiresOAuth: true,
   },
-  confluence: {
-    name: "confluence",
+  [ServiceName.CONFLUENCE]: {
+    name: ServiceName.CONFLUENCE,
     oauthProvider: "atlassian",
     requiresOAuth: true,
   },
-  bitbucket: {
-    name: "bitbucket",
+  [ServiceName.BITBUCKET]: {
+    name: ServiceName.BITBUCKET,
     oauthProvider: null,
     requiresOAuth: false,
   },
-  kyg: {
-    name: "kyg",
+  [ServiceName.KYG]: {
+    name: ServiceName.KYG,
     oauthProvider: null,
     requiresOAuth: false,
   },

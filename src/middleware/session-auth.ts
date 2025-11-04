@@ -1,7 +1,6 @@
 import type { Context, Next } from "hono";
 import { verifyCliSessionToken } from "../services/auth/auth.js";
 import { getCliSessionBySessionToken } from "../services/database/db-store.js";
-import { getKaySessionIdByToken } from "../services/connections/connection-service.js";
 import { ErrorCode, type ErrorResponse } from "../types/errors.js";
 
 export function sessionAuthMiddleware() {
@@ -24,7 +23,7 @@ export function sessionAuthMiddleware() {
     try {
       const payload = verifyCliSessionToken(sessionToken);
 
-      const session = getCliSessionBySessionToken(sessionToken);
+      const session = await getCliSessionBySessionToken(sessionToken);
 
       if (!session) {
         return c.json<ErrorResponse>(
@@ -50,7 +49,7 @@ export function sessionAuthMiddleware() {
       }
 
       c.set("session_token", sessionToken);
-      const kaySessionId = getKaySessionIdByToken(sessionToken);
+      const kaySessionId = payload.kay_session_id;
       if (kaySessionId) {
         c.set("session_id", kaySessionId);
       }

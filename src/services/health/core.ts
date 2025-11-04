@@ -1,4 +1,4 @@
-import db from "../../services/database/database.js";
+import { prisma } from "../../db/client.js";
 import { isOpenAIConfigured } from "../../services/ai/openai-service.js";
 import type { HealthReport, ServiceStatus } from "../../types/health.js";
 
@@ -29,7 +29,7 @@ export function handleError<T extends ServiceStatus>(
 
 export async function checkDatabase(health: HealthReport) {
   try {
-    db.prepare("SELECT 1").get();
+    await prisma.$queryRaw`SELECT 1`;
     health.services.database.status = "healthy";
   } catch (error) {
     health.services.database = handleError(health.services.database, error);

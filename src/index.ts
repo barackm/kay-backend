@@ -7,7 +7,7 @@ import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { ENV } from "./config/env.js";
-import "./services/database/database.js";
+import "./db/client.js"; // Initialize Prisma client
 import authRouter from "./routes/auth.js";
 import authStatusRouter from "./routes/auth-status.js";
 import askRouter from "./routes/ask.js";
@@ -45,8 +45,11 @@ app.route("/connections", connectionsRouter);
 app.route("/connections", serviceCallbacksRouter);
 app.route("/session", sessionRouter);
 
-cleanupExpiredSessions();
-setInterval(cleanupExpiredSessions, 24 * 60 * 60 * 1000);
+// Cleanup expired sessions on startup and daily
+cleanupExpiredSessions().catch(console.error);
+setInterval(() => {
+  cleanupExpiredSessions().catch(console.error);
+}, 24 * 60 * 60 * 1000);
 
 serve({
   fetch: app.fetch,
