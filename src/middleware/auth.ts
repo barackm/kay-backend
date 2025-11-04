@@ -8,6 +8,7 @@ import {
 import type { UserContext } from "../types/auth.js";
 import type { StoredToken } from "../types/oauth.js";
 import { getKaySessionIdByToken } from "../services/connections/connection-service.js";
+import { ErrorCode, type ErrorResponse } from "../types/errors.js";
 
 const SPACES_CACHE_TTL_MS = 5 * 60 * 1000;
 const spacesCache = new Map<

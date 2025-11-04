@@ -103,12 +103,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pending_confirmations_expires_at ON pending_confirmations(expires_at);
   CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at);
 
-         CREATE TABLE IF NOT EXISTS kay_sessions (
+  CREATE TABLE IF NOT EXISTS kay_sessions (
            id TEXT PRIMARY KEY,
-           account_id TEXT,
            created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL,
-           FOREIGN KEY (account_id) REFERENCES users(account_id) ON DELETE CASCADE
+           updated_at INTEGER NOT NULL
          );
 
   CREATE TABLE IF NOT EXISTS connections (
@@ -127,7 +125,7 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_connections_kay_session_id ON connections(kay_session_id);
   CREATE INDEX IF NOT EXISTS idx_connections_service_name ON connections(service_name);
-         CREATE INDEX IF NOT EXISTS idx_kay_sessions_account_id ON kay_sessions(account_id);
+         -- idx_kay_sessions_account_id removed; kay_sessions no longer stores account_id
 `);
 
 db.exec(`
@@ -174,6 +172,37 @@ try {
   }
 } catch (error) {
   console.error("[Database Migration] Error:", error);
+}
+
+// Migration: Remove account_id from kay_sessions (legacy column)
+try {
+  const ksInfo = db.prepare("PRAGMA table_info(kay_sessions)").all() as Array<{
+    name: string;
+  }>;
+  const hasAccountId = ksInfo.some((col) => col.name === "account_id");
+  if (hasAccountId) {
+    console.log("[Database Migration] Removing account_id from kay_sessions");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS kay_sessions_new (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      INSERT INTO kay_sessions_new (id, created_at, updated_at)
+      SELECT id, created_at, updated_at FROM kay_sessions;
+
+      DROP TABLE kay_sessions;
+      ALTER TABLE kay_sessions_new RENAME TO kay_sessions;
+    `);
+
+    // Attempt to drop legacy index if it exists
+    try {
+      db.exec(`DROP INDEX IF EXISTS idx_kay_sessions_account_id`);
+    } catch {}
+  }
+} catch (error) {
+  console.error("[Database Migration] Error updating kay_sessions:", error);
 }
 
 db.exec(`

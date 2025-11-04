@@ -31,5 +31,12 @@ export const ENV = {
   MCP_JIRA_DISABLED_TOOLS: process.env.MCP_JIRA_DISABLED_TOOLS
     ? process.env.MCP_JIRA_DISABLED_TOOLS.split(",").map((t) => t.trim())
     : undefined,
+  MCP_BITBUCKET_COMMAND: process.env.MCP_BITBUCKET_COMMAND || "npx",
+  MCP_BITBUCKET_ARGS: process.env.MCP_BITBUCKET_ARGS
+    ? process.env.MCP_BITBUCKET_ARGS.split(",")
+    : ["-y", "bitbucket-mcp@latest"],
+  MCP_BITBUCKET_DISABLED_TOOLS: process.env.MCP_BITBUCKET_DISABLED_TOOLS
+    ? process.env.MCP_BITBUCKET_DISABLED_TOOLS.split(",").map((t) => t.trim())
+    : undefined,
   KYG_CORE_BASE_URL: process.env.KYG_CORE_BASE_URL || "",
 };

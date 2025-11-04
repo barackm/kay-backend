@@ -18,17 +18,15 @@ import { ENV } from "../../config/env.js";
 export function getKaySessionById(kaySessionId: string):
   | {
       id: string;
-      account_id: string | null;
     }
   | undefined {
   console.log("[getKaySessionById] Looking up kay_session_id:", kaySessionId);
 
   const kaySession = db
-    .prepare(`SELECT id, account_id FROM kay_sessions WHERE id = ?`)
+    .prepare(`SELECT id FROM kay_sessions WHERE id = ?`)
     .get(kaySessionId) as
     | {
         id: string;
-        account_id: string | null;
       }
     | undefined;
 
@@ -41,7 +39,9 @@ export function getKaySessionById(kaySessionId: string):
       allSessions.map((s) => s.id)
     );
   } else {
-    console.log("[getKaySessionById] Found kay_session:", kaySession);
+    console.log("[getKaySessionById] Found kay_session:", {
+      id: kaySession.id,
+    });
   }
 
   return kaySession;
@@ -57,9 +57,9 @@ export function createKaySession(): string {
 
   const result = db
     .prepare(
-      `INSERT INTO kay_sessions (id, account_id, created_at, updated_at) VALUES (?, ?, ?, ?)`
+      `INSERT INTO kay_sessions (id, created_at, updated_at) VALUES (?, ?, ?)`
     )
-    .run(kaySessionId, null, now, now);
+    .run(kaySessionId, now, now);
 
   console.log("[createKaySession] Insert result:", result.changes, "changes");
 
@@ -85,8 +85,8 @@ export function getOrCreateKaySessionByToken(sessionToken: string): string {
     .substring(7)}`;
   const now = Date.now();
   db.prepare(
-    `INSERT INTO kay_sessions (id, account_id, created_at, updated_at) VALUES (?, ?, ?, ?)`
-  ).run(kaySessionId, null, now, now);
+    `INSERT INTO kay_sessions (id, created_at, updated_at) VALUES (?, ?, ?)`
+  ).run(kaySessionId, now, now);
   return kaySessionId;
 }
 
@@ -94,7 +94,7 @@ export function getKaySessionIdByToken(
   _sessionToken: string
 ): string | undefined {
   // No reliable mapping by token; require session_id to be provided by caller
-  return undefined;
+    return undefined;
 }
 
 export function updateKaySessionAccountId(
@@ -366,14 +366,14 @@ export async function connectAtlassianService(
   const accountId = user.account_id;
 
   try {
-    storeUserTokens(
-      accountId,
-      tokens.access_token,
-      tokens.refresh_token,
-      tokens.expires_in,
-      user,
-      resources
-    );
+  storeUserTokens(
+    accountId,
+    tokens.access_token,
+    tokens.refresh_token,
+    tokens.expires_in,
+    user,
+    resources
+  );
   } catch (error) {
     if (hasExistingConnections) {
       console.log(

@@ -21,13 +21,10 @@ authStatusRouter.get("/status/:state", async (c) => {
     });
   }
 
-  const accountId = getStateAccountId(state);
-
   removeState(state);
 
   return c.json({
     status: "completed",
-    account_id: accountId,
     message:
       "Authorization completed successfully. Use your existing session token for authentication.",
   });

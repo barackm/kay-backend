@@ -58,13 +58,13 @@ export function buildServiceAuthorizationUrl(
   state: string
 ): string {
   const provider = getOAuthProvider(serviceName);
-
+  
   if (!provider) {
     throw new Error(`Service ${serviceName} does not support OAuth`);
   }
 
   let callbackUrl: string;
-
+  
   switch (provider) {
     case "atlassian":
       callbackUrl = `${ENV.ATLASSIAN_CALLBACK_URL}?service=${serviceName}`;
