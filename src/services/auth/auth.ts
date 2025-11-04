@@ -17,17 +17,25 @@ export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, ENV.JWT_SECRET) as JwtPayload;
 }
 
-export function generateCliSessionToken(accountId?: string): string {
+export function generateCliSessionToken(kaySessionId: string): string {
   const payload: CliSessionPayload = {
-    account_id: accountId || "",
+    kay_session_id: kaySessionId,
   };
-  return jwt.sign(payload, ENV.K_SESSION_SECRET, {
+  const secret = ENV.K_SESSION_SECRET || ENV.JWT_SECRET;
+  if (!secret) {
+    throw new Error("K_SESSION_SECRET or JWT_SECRET must be configured");
+  }
+  return jwt.sign(payload, secret, {
     expiresIn: ENV.CLI_SESSION_EXPIRES_IN,
   } as jwt.SignOptions);
 }
 
 export function verifyCliSessionToken(token: string): CliSessionPayload {
-  return jwt.verify(token, ENV.K_SESSION_SECRET) as CliSessionPayload;
+  const secret = ENV.K_SESSION_SECRET || ENV.JWT_SECRET;
+  if (!secret) {
+    throw new Error("K_SESSION_SECRET or JWT_SECRET must be configured");
+  }
+  return jwt.verify(token, secret) as CliSessionPayload;
 }
 
 export function generateRefreshToken(): string {

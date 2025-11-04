@@ -5,7 +5,7 @@ const CONFIRMATION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 
 export interface InteractiveSession {
   session_id: string;
-  account_id: string;
+  kay_session_id: string;
   context: AskServiceContext;
   history: Array<{ role: string; content: string }>;
   createdAt: number;
@@ -14,7 +14,7 @@ export interface InteractiveSession {
 
 export interface PendingConfirmation {
   confirmation_token: string;
-  account_id: string;
+  kay_session_id: string;
   context: AskServiceContext;
   expiresAt: number;
   createdAt: number;
@@ -22,18 +22,18 @@ export interface PendingConfirmation {
 
 export function storeInteractiveSession(
   sessionId: string,
-  accountId: string,
+  kaySessionId: string,
   context: AskServiceContext,
   history: Array<{ role: string; content: string }> = []
 ): void {
   const now = Date.now();
   db.prepare(
     `INSERT OR REPLACE INTO interactive_sessions 
-     (session_id, account_id, context_data, history, created_at, updated_at)
+     (session_id, kay_session_id, context_data, history, created_at, updated_at)
      VALUES (?, ?, ?, ?, COALESCE((SELECT created_at FROM interactive_sessions WHERE session_id = ?), ?), ?)`
   ).run(
     sessionId,
-    accountId,
+    kaySessionId,
     JSON.stringify(context),
     JSON.stringify(history),
     sessionId,
@@ -47,13 +47,13 @@ export function getInteractiveSession(
 ): InteractiveSession | undefined {
   const row = db
     .prepare(
-      `SELECT session_id, account_id, context_data, history, created_at, updated_at
+      `SELECT session_id, kay_session_id, context_data, history, created_at, updated_at
        FROM interactive_sessions WHERE session_id = ?`
     )
     .get(sessionId) as
     | {
         session_id: string;
-        account_id: string;
+        kay_session_id: string;
         context_data: string;
         history: string;
         created_at: number;
@@ -66,7 +66,7 @@ export function getInteractiveSession(
   try {
     return {
       session_id: row.session_id,
-      account_id: row.account_id,
+      kay_session_id: row.kay_session_id,
       context: JSON.parse(row.context_data) as AskServiceContext,
       history: JSON.parse(row.history) as Array<{
         role: string;
@@ -97,17 +97,17 @@ export function deleteInteractiveSession(sessionId: string): void {
 
 export function storePendingConfirmation(
   token: string,
-  accountId: string,
+  kaySessionId: string,
   context: AskServiceContext
 ): void {
   const now = Date.now();
   db.prepare(
     `INSERT OR REPLACE INTO pending_confirmations 
-     (confirmation_token, account_id, request_data, expires_at, created_at)
+     (confirmation_token, kay_session_id, request_data, expires_at, created_at)
      VALUES (?, ?, ?, ?, ?)`
   ).run(
     token,
-    accountId,
+    kaySessionId,
     JSON.stringify(context),
     now + CONFIRMATION_EXPIRY_MS,
     now
@@ -119,13 +119,13 @@ export function getPendingConfirmation(
 ): PendingConfirmation | undefined {
   const row = db
     .prepare(
-      `SELECT confirmation_token, account_id, request_data, expires_at, created_at
+      `SELECT confirmation_token, kay_session_id, request_data, expires_at, created_at
        FROM pending_confirmations WHERE confirmation_token = ?`
     )
     .get(token) as
     | {
         confirmation_token: string;
-        account_id: string;
+        kay_session_id: string;
         request_data: string;
         expires_at: number;
         created_at: number;
@@ -143,7 +143,7 @@ export function getPendingConfirmation(
   try {
     return {
       confirmation_token: row.confirmation_token,
-      account_id: row.account_id,
+      kay_session_id: row.kay_session_id,
       context: JSON.parse(row.request_data) as AskServiceContext,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
@@ -164,9 +164,9 @@ export function cleanupExpiredConfirmations(): void {
   db.prepare(`DELETE FROM pending_confirmations WHERE expires_at < ?`).run(now);
 }
 
-export function deleteInteractiveSessionsByAccount(accountId: string): void {
-  db.prepare(`DELETE FROM interactive_sessions WHERE account_id = ?`).run(
-    accountId
+export function deleteInteractiveSessionsByKaySession(kaySessionId: string): void {
+  db.prepare(`DELETE FROM interactive_sessions WHERE kay_session_id = ?`).run(
+    kaySessionId
   );
 }
 

@@ -9,6 +9,7 @@ import {
 import {
   generateCliSessionToken,
   generateRefreshToken,
+  verifyCliSessionToken,
 } from "../services/auth/auth.js";
 import { ENV } from "../config/env.js";
 import { validateRefreshTokenExpiration } from "../utils/validation.js";
@@ -61,7 +62,19 @@ authRouter.post("/refresh", async (c) => {
     return c.json({ error: "Invalid or expired refresh token" }, 401);
   }
 
-  const newSessionToken = generateCliSessionToken();
+  // Extract kay_session_id from old token to preserve it
+  let kaySessionId: string;
+  try {
+    const oldPayload = verifyCliSessionToken(session.session_token);
+    kaySessionId = oldPayload.kay_session_id;
+    if (!kaySessionId) {
+      throw new Error("Old token missing kay_session_id");
+    }
+  } catch {
+    return c.json({ error: "Cannot refresh: old token missing kay_session_id" }, 403);
+  }
+
+  const newSessionToken = generateCliSessionToken(kaySessionId);
   const newRefreshToken = generateRefreshToken();
 
   deleteCliSessionByRefreshToken(refresh_token);

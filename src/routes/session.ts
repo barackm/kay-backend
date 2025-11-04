@@ -34,9 +34,6 @@ sessionRouter.post("/init", async (c) => {
   try {
     const body = (await c.req.json().catch(() => ({}))) as InitSessionRequest;
 
-    const sessionToken = generateCliSessionToken();
-    const refreshToken = generateRefreshToken();
-
     const refreshExpiresInMs = validateRefreshTokenExpiration(
       ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
     );
@@ -44,6 +41,9 @@ sessionRouter.post("/init", async (c) => {
 
     const kaySessionId = createKaySession();
     const kaySession = getKaySessionById(kaySessionId);
+
+    const sessionToken = generateCliSessionToken(kaySessionId);
+    const refreshToken = generateRefreshToken();
 
     storeCliSession(
       sessionToken,
@@ -117,7 +117,26 @@ sessionRouter.post("/refresh", async (c) => {
       );
     }
 
-    const newSessionToken = generateCliSessionToken();
+    // Extract kay_session_id from old token to preserve it
+    let kaySessionId: string;
+    try {
+      const oldPayload = verifyCliSessionToken(session.session_token);
+      kaySessionId = oldPayload.kay_session_id;
+      if (!kaySessionId) {
+        throw new Error("Old token missing kay_session_id");
+      }
+    } catch {
+      return c.json<ErrorResponse>(
+        {
+          error: ErrorCode.TOKEN_INVALID,
+          code: ErrorCode.TOKEN_INVALID,
+          message: "Cannot refresh: old token missing kay_session_id",
+        },
+        403
+      );
+    }
+
+    const newSessionToken = generateCliSessionToken(kaySessionId);
     const sessionExpiresInMs = parseDurationToMs(ENV.CLI_SESSION_EXPIRES_IN);
     const newExpiresAt = now + sessionExpiresInMs;
 

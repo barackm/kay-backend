@@ -11,7 +11,6 @@ import "./services/database/database.js";
 import authRouter from "./routes/auth.js";
 import authStatusRouter from "./routes/auth-status.js";
 import askRouter from "./routes/ask.js";
-import mcpRouter from "./routes/mcp.js";
 import healthRouter from "./routes/health.js";
 import connectionsRouter from "./routes/connections.js";
 import serviceCallbacksRouter from "./routes/service-callbacks.js";
@@ -42,7 +41,6 @@ app.get("/assets/images/logo_orange_kay.png", (c) => {
 app.route("/auth", authRouter);
 app.route("/auth", authStatusRouter);
 app.route("/", askRouter);
-app.route("/mcp", mcpRouter);
 app.route("/connections", connectionsRouter);
 app.route("/connections", serviceCallbacksRouter);
 app.route("/session", sessionRouter);

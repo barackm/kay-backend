@@ -10,7 +10,7 @@ export interface JwtPayload extends JiraCredentials {
 }
 
 export interface CliSessionPayload {
-  account_id?: string;
+  kay_session_id: string;
   iat?: number;
   exp?: number;
 }
