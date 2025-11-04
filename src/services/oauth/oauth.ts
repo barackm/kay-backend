@@ -3,6 +3,8 @@ import type {
   AtlassianTokenResponse,
   AtlassianUser,
   AccessibleResource,
+  BitbucketTokenResponse,
+  BitbucketUser,
 } from "../../types/oauth.js";
 
 async function exchangeCodeForTokens(
@@ -123,5 +125,75 @@ export async function handleOAuthCallback(code: string): Promise<{
     tokens,
     user,
     resources: finalResources,
+  };
+}
+
+async function exchangeBitbucketCodeForTokens(
+  code: string,
+  callbackUrl: string
+): Promise<BitbucketTokenResponse> {
+  const credentials = Buffer.from(
+    `${ENV.BITBUCKET_CLIENT_ID}:${ENV.BITBUCKET_CLIENT_SECRET}`
+  ).toString("base64");
+
+  const params = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: callbackUrl,
+  });
+
+  const response = await fetch(
+    "https://bitbucket.org/site/oauth2/access_token",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Failed to exchange Bitbucket code for tokens: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
+
+  return response.json();
+}
+
+async function fetchBitbucketUser(accessToken: string): Promise<BitbucketUser> {
+  const response = await fetch("https://api.bitbucket.org/2.0/user", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Failed to fetch Bitbucket user: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
+
+  return response.json();
+}
+
+export async function handleBitbucketCallback(
+  code: string,
+  callbackUrl: string
+): Promise<{
+  tokens: BitbucketTokenResponse;
+  user: BitbucketUser;
+}> {
+  const tokens = await exchangeBitbucketCodeForTokens(code, callbackUrl);
+  const user = await fetchBitbucketUser(tokens.access_token);
+
+  return {
+    tokens,
+    user,
   };
 }

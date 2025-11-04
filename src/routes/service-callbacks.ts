@@ -9,7 +9,10 @@ import {
   getStateKaySessionId,
   getStateServiceName,
 } from "../services/connections/state-store.js";
-import { connectAtlassianService } from "../services/connections/connection-service.js";
+import {
+  connectAtlassianService,
+  connectBitbucketService,
+} from "../services/connections/connection-service.js";
 import type { ServiceName } from "../types/connections.js";
 import {
   getOAuthProvider,
@@ -86,6 +89,8 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
       );
     }
 
+    let accountId: string | undefined;
+
     switch (provider) {
       case "atlassian":
         if (serviceName !== "jira" && serviceName !== "confluence") {
@@ -105,6 +110,8 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
           code
         );
 
+        accountId = result.accountId;
+
         if (result.isFirstConnection) {
           completeState(state, result.accountId);
 
@@ -121,18 +128,55 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
             result.accountId,
             refreshExpiresInMs
           );
+        } else {
+          completeState(state, result.accountId);
         }
-
-        const htmlPath = join(__dirname, "../templates/auth-success.html");
-        const html = readFileSync(htmlPath, "utf-8");
-
-        return c.html(html);
+        break;
 
       case "bitbucket":
-        return c.json(
-          { error: "Bitbucket OAuth callback not yet implemented" },
-          501
+        if (serviceName !== "bitbucket") {
+          return c.json(
+            { error: `Service ${serviceName} is not a Bitbucket service` },
+            400
+          );
+        }
+
+        const callbackUrl = `${ENV.BITBUCKET_CALLBACK_URL}?service=${serviceName}`;
+        console.log(
+          "[OAuth Callback] Calling connectBitbucketService with kay_session_id:",
+          storedKaySessionId
         );
+
+        const bitbucketResult = await connectBitbucketService(
+          storedKaySessionId,
+          code,
+          callbackUrl
+        );
+
+        accountId = bitbucketResult.accountId;
+
+        if (bitbucketResult.isFirstConnection) {
+          completeState(state, bitbucketResult.accountId);
+
+          const sessionToken = generateCliSessionToken(
+            bitbucketResult.accountId
+          );
+          const refreshToken = generateRefreshToken();
+
+          const refreshExpiresInMs = validateRefreshTokenExpiration(
+            ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
+          );
+
+          storeCliSession(
+            sessionToken,
+            refreshToken,
+            bitbucketResult.accountId,
+            refreshExpiresInMs
+          );
+        } else {
+          completeState(state, bitbucketResult.accountId);
+        }
+        break;
 
       default:
         return c.json(
@@ -140,6 +184,11 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
           501
         );
     }
+
+    const htmlPath = join(__dirname, "../templates/auth-success.html");
+    const html = readFileSync(htmlPath, "utf-8");
+
+    return c.html(html);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";

@@ -9,10 +9,6 @@ export class MCPJiraService {
   private readonly TOOLS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   async initialize(userTokens: StoredToken): Promise<void> {
-    if (!ENV.MCP_JIRA_ENABLED) {
-      return;
-    }
-
     const jiraResource = userTokens.resources.find((r) =>
       r.url.includes("atlassian.net")
     );

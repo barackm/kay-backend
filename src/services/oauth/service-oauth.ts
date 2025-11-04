@@ -39,6 +39,20 @@ function buildAtlassianAuthorizationUrl(
   return `https://auth.atlassian.com/authorize?${params.toString()}`;
 }
 
+function buildBitbucketAuthorizationUrl(
+  state: string,
+  callbackUrl: string
+): string {
+  const params = new URLSearchParams({
+    client_id: ENV.BITBUCKET_CLIENT_ID,
+    response_type: "code",
+    redirect_uri: callbackUrl,
+    state,
+  });
+
+  return `https://bitbucket.org/site/oauth2/authorize?${params.toString()}`;
+}
+
 export function buildServiceAuthorizationUrl(
   serviceName: ServiceName,
   state: string
@@ -57,7 +71,7 @@ export function buildServiceAuthorizationUrl(
       return buildAtlassianAuthorizationUrl(state, callbackUrl);
     case "bitbucket":
       callbackUrl = `${ENV.BITBUCKET_CALLBACK_URL}?service=${serviceName}`;
-      throw new Error("Bitbucket OAuth not yet implemented");
+      return buildBitbucketAuthorizationUrl(state, callbackUrl);
     default:
       throw new Error(`OAuth provider ${provider} not supported`);
   }

@@ -7,13 +7,6 @@ const mcpRouter = new Hono();
 
 mcpRouter.get("/status", authMiddleware(), async (c) => {
   try {
-    if (!ENV.MCP_JIRA_ENABLED) {
-      return c.json({
-        enabled: false,
-        message: "MCP Jira is disabled. Set MCP_JIRA_ENABLED=true to enable.",
-      });
-    }
-
     const atlassianTokens = c.get("atlassian_tokens");
     const accountId = c.get("account_id");
 
@@ -52,7 +45,7 @@ mcpRouter.get("/status", authMiddleware(), async (c) => {
   } catch (error) {
     return c.json(
       {
-        enabled: ENV.MCP_JIRA_ENABLED,
+        enabled: true,
         error: error instanceof Error ? error.message : "Unknown error",
       },
       500

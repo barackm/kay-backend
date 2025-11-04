@@ -56,7 +56,7 @@ healthRouter.get("/", authMiddleware(), async (c) => {
       },
       mcp_jira: {
         status: "disabled",
-        enabled: ENV.MCP_JIRA_ENABLED,
+        enabled: true,
       },
       confluence: {
         status: "healthy",
@@ -88,63 +88,61 @@ healthRouter.get("/", authMiddleware(), async (c) => {
 
   let allTools: Array<{ name: string; description?: string }> = [];
 
-  if (ENV.MCP_JIRA_ENABLED) {
+  try {
+    const jiraService = new MCPJiraService();
+
     try {
-      const jiraService = new MCPJiraService();
+      await jiraService.initialize(tokens);
+      const connectionStatus = await jiraService.getConnectionStatus();
+      const tools = connectionStatus.connected
+        ? await jiraService.getTools(true)
+        : [];
 
-      try {
-        await jiraService.initialize(tokens);
-        const connectionStatus = await jiraService.getConnectionStatus();
-        const tools = connectionStatus.connected
-          ? await jiraService.getTools(true)
-          : [];
-
-        allTools = tools.map((t) => {
-          const tool: { name: string; description?: string } = {
-            name: t.name,
-          };
-          if (t.description) {
-            tool.description = t.description;
-          }
-          return tool;
-        });
-
-        const mcpJiraStatus: typeof health.services.mcp_jira = {
-          status: connectionStatus.connected ? "healthy" : "unhealthy",
-          enabled: true,
-          connected: connectionStatus.connected,
-          initialized: connectionStatus.initialized,
-          toolCount: connectionStatus.toolCount,
-          tools: allTools,
+      allTools = tools.map((t) => {
+        const tool: { name: string; description?: string } = {
+          name: t.name,
         };
-        if (connectionStatus.error) {
-          mcpJiraStatus.message = connectionStatus.error;
+        if (t.description) {
+          tool.description = t.description;
         }
-        health.services.mcp_jira = mcpJiraStatus;
+        return tool;
+      });
 
-        if (!connectionStatus.connected) {
-          hasNonCriticalFailure = true;
-        }
+      const mcpJiraStatus: typeof health.services.mcp_jira = {
+        status: connectionStatus.connected ? "healthy" : "unhealthy",
+        enabled: true,
+        connected: connectionStatus.connected,
+        initialized: connectionStatus.initialized,
+        toolCount: connectionStatus.toolCount,
+        tools: allTools,
+      };
+      if (connectionStatus.error) {
+        mcpJiraStatus.message = connectionStatus.error;
+      }
+      health.services.mcp_jira = mcpJiraStatus;
 
-        await jiraService.disconnect();
-      } catch (error) {
-        health.services.mcp_jira = {
-          status: "unhealthy",
-          enabled: true,
-          connected: false,
-          initialized: false,
-          message: error instanceof Error ? error.message : "Unknown error",
-        };
+      if (!connectionStatus.connected) {
         hasNonCriticalFailure = true;
       }
+
+      await jiraService.disconnect();
     } catch (error) {
       health.services.mcp_jira = {
         status: "unhealthy",
         enabled: true,
+        connected: false,
+        initialized: false,
         message: error instanceof Error ? error.message : "Unknown error",
       };
       hasNonCriticalFailure = true;
     }
+  } catch (error) {
+    health.services.mcp_jira = {
+      status: "unhealthy",
+      enabled: true,
+      message: error instanceof Error ? error.message : "Unknown error",
+    };
+    hasNonCriticalFailure = true;
   }
 
   try {

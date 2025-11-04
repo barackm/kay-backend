@@ -23,6 +23,28 @@ export interface AccessibleResource {
   avatarUrl: string;
 }
 
+export interface BitbucketTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  refresh_token?: string;
+  scopes: string;
+}
+
+export interface BitbucketUser {
+  uuid: string;
+  username: string;
+  display_name: string;
+  account_id: string;
+  links: {
+    avatar: {
+      href: string;
+    };
+  };
+  created_on: string;
+  [key: string]: unknown;
+}
+
 export interface StoredToken {
   access_token: string;
   refresh_token: string;

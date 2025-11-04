@@ -740,7 +740,6 @@ OPENAI_MAX_TOKENS=2000
 OPENAI_TEMPERATURE=0.7
 
 # MCP Jira Configuration
-MCP_JIRA_ENABLED=true
 MCP_JIRA_COMMAND=docker
 MCP_JIRA_ARGS=run,--rm,-i,ghcr.io/sooperset/mcp-atlassian:latest
 MCP_JIRA_DISABLED_TOOLS=jira_delete_issue,confluence_delete_page
@@ -758,7 +757,6 @@ MCP_JIRA_DISABLED_TOOLS=jira_delete_issue,confluence_delete_page
 - **CLI_SESSION_EXPIRES_IN**: How long session tokens last (default: 30m)
 - **CLI_REFRESH_TOKEN_EXPIRES_IN**: How long refresh tokens last (default: 7d)
 - **OPENAI_MODEL**: Which OpenAI model to use (default: gpt-4o-mini)
-- **MCP_JIRA_ENABLED**: Enable/disable MCP Jira integration
 - **MCP_JIRA_COMMAND**: Command to run MCP server (default: docker)
 - **MCP_JIRA_ARGS**: Arguments for MCP server command
 - **MCP_JIRA_DISABLED_TOOLS**: Comma-separated list of tools to disable

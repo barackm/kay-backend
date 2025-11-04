@@ -93,10 +93,6 @@ export class AskService {
   private async getJiraService(
     context: AskServiceContext
   ): Promise<MCPJiraService | null> {
-    if (!ENV.MCP_JIRA_ENABLED) {
-      return null;
-    }
-
     if (this.jiraService) {
       await this.jiraService.disconnect();
     }

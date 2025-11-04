@@ -6,7 +6,10 @@ import type {
   ConnectionMetadata,
   ConnectionStatus,
 } from "../../types/connections.js";
-import { handleOAuthCallback } from "../oauth/oauth.js";
+import {
+  handleOAuthCallback,
+  handleBitbucketCallback,
+} from "../oauth/oauth.js";
 import { storeUserTokens, getUserTokens } from "../database/db-store.js";
 import type { StoredToken } from "../../types/oauth.js";
 import { ENV } from "../../config/env.js";
@@ -416,6 +419,88 @@ export function getAtlassianTokensFromConnection(
   }
 
   return getUserTokens(accountId);
+}
+
+export async function connectBitbucketService(
+  kaySessionId: string,
+  code: string,
+  callbackUrl: string
+): Promise<{
+  connection: Connection;
+  isFirstConnection: boolean;
+  accountId: string;
+}> {
+  const kaySession = getKaySessionById(kaySessionId);
+  if (!kaySession) {
+    throw new Error("Invalid kay_session_id");
+  }
+
+  const existingConnection = getConnection(kaySessionId, "bitbucket");
+  if (existingConnection) {
+    console.log(
+      "[connectBitbucketService] Existing Bitbucket connection found, will be replaced after successful authentication"
+    );
+  }
+
+  let tokens, user;
+  try {
+    const result = await handleBitbucketCallback(code, callbackUrl);
+    tokens = result.tokens;
+    user = result.user;
+  } catch (error) {
+    if (existingConnection) {
+      console.log(
+        "[connectBitbucketService] Bitbucket OAuth callback failed, deleting existing connection"
+      );
+      deleteConnection(kaySessionId, "bitbucket");
+    }
+    throw error;
+  }
+
+  if (!tokens.refresh_token) {
+    if (existingConnection) {
+      console.log(
+        "[connectBitbucketService] No refresh token received, deleting existing connection"
+      );
+      deleteConnection(kaySessionId, "bitbucket");
+    }
+    throw new Error("No refresh token received from Bitbucket");
+  }
+
+  const accountId = `bitbucket_${user.uuid}`;
+  const isFirstConnection = kaySession.account_id === null;
+
+  if (isFirstConnection) {
+    updateKaySessionAccountId(kaySessionId, accountId);
+  }
+
+  const metadata: ConnectionMetadata = {
+    account_id: accountId,
+    uuid: user.uuid,
+    username: user.username,
+    display_name: user.display_name,
+    avatar_url: user.links?.avatar?.href,
+    user_data: user,
+  };
+
+  const expiresAt = tokens.expires_in
+    ? Date.now() + tokens.expires_in * 1000
+    : undefined;
+
+  const connection = storeConnection(
+    kaySessionId,
+    "bitbucket",
+    tokens.access_token,
+    tokens.refresh_token,
+    expiresAt,
+    metadata
+  );
+
+  return {
+    connection,
+    isFirstConnection,
+    accountId,
+  };
 }
 
 interface KygLoginResponse {

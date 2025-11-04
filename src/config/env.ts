@@ -14,6 +14,8 @@ export const ENV = {
   ATLASSIAN_CALLBACK_URL:
     process.env.ATLASSIAN_CALLBACK_URL ||
     "http://localhost:4000/connections/oauth/callback",
+  BITBUCKET_CLIENT_ID: process.env.BITBUCKET_CLIENT_ID || "",
+  BITBUCKET_CLIENT_SECRET: process.env.BITBUCKET_CLIENT_SECRET || "",
   BITBUCKET_CALLBACK_URL:
     process.env.BITBUCKET_CALLBACK_URL ||
     "http://localhost:4000/connections/oauth/callback",
@@ -21,7 +23,6 @@ export const ENV = {
   OPENAI_MODEL: process.env.OPENAI_MODEL || "gpt-4o-mini",
   OPENAI_MAX_TOKENS: Number(process.env.OPENAI_MAX_TOKENS) || 2000,
   OPENAI_TEMPERATURE: Number(process.env.OPENAI_TEMPERATURE) || 0.7,
-  MCP_JIRA_ENABLED: process.env.MCP_JIRA_ENABLED === "true",
   MCP_JIRA_COMMAND: process.env.MCP_JIRA_COMMAND || "docker",
   MCP_JIRA_ARGS: process.env.MCP_JIRA_ARGS
     ? process.env.MCP_JIRA_ARGS.split(",")
