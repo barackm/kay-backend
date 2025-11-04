@@ -99,11 +99,21 @@ serviceCallbacksRouter.get("/oauth/callback", async (c) => {
           );
         }
 
+        console.log(
+          `[OAuth Callback] Connecting Atlassian service for session ${storedKaySessionId}, state ${state}`
+        );
         const result = await connectAtlassianService(
           storedKaySessionId,
           code,
           state
         );
+
+        console.log(`[OAuth Callback] Connection stored successfully:`, {
+          service: serviceName,
+          accountId: result.accountId,
+          connectionId: result.connection.id,
+          kaySessionId: storedKaySessionId,
+        });
 
         accountId = result.accountId;
         break;

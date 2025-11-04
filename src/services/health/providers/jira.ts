@@ -1,26 +1,63 @@
 import type { HealthReport } from "../../../types/health.js";
-import type { StoredToken } from "../../../types/oauth.js";
+import { getConnection } from "../../connections/connection-service.js";
+import { ServiceName } from "../../../types/connections.js";
+import { getJiraMCPClient } from "../../mcp/manager.js";
 
-export async function checkJira(
-  tokens: StoredToken | undefined,
-  health: HealthReport
-) {
-  if (!tokens) {
+export async function checkJira(kaySessionId: string, health: HealthReport) {
+  const connection = await getConnection(kaySessionId, ServiceName.JIRA);
+
+  if (!connection) {
     health.services.mcp_jira = {
       status: "unhealthy",
-      enabled: true,
+      enabled: false,
       connected: false,
       initialized: false,
-      message: "No Atlassian connection found",
+      message: "No Atlassian connection found. Please connect Jira first.",
     };
     return;
   }
 
-  health.services.mcp_jira = {
-    status: "disabled",
-    enabled: true,
-    connected: false,
-    initialized: false,
-    message: "MCP integration not yet implemented",
-  };
+  try {
+    const mcpClient = await getJiraMCPClient(kaySessionId);
+
+    if (!mcpClient || !mcpClient.isReady()) {
+      health.services.mcp_jira = {
+        status: "unhealthy",
+        enabled: true,
+        connected: true,
+        initialized: false,
+        message: "MCP client not initialized",
+      };
+      return;
+    }
+
+    const tools = mcpClient.getTools();
+
+    health.services.mcp_jira = {
+      status: "healthy",
+      enabled: true,
+      connected: true,
+      initialized: true,
+      toolCount: tools.length,
+      tools: tools.map((tool) => {
+        const toolInfo: { name: string; description?: string } = {
+          name: tool.name,
+        };
+        if (tool.description) {
+          toolInfo.description = tool.description;
+        }
+        return toolInfo;
+      }),
+    };
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    health.services.mcp_jira = {
+      status: "unhealthy",
+      enabled: true,
+      connected: true,
+      initialized: false,
+      message: `MCP client error: ${errorMessage}`,
+    };
+  }
 }

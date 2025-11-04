@@ -13,11 +13,7 @@ export interface MCPStatus extends ServiceStatus {
   tools?: Array<{ name: string; description?: string }>;
 }
 
-export interface ConfluenceStatus extends ServiceStatus {
-  accessible: boolean;
-  spaceCount?: number;
-  tools?: Array<{ name: string; description?: string }>;
-}
+export interface ConfluenceStatus extends MCPStatus {}
 
 export interface HealthReport {
   status: HealthStatus;

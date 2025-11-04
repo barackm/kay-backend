@@ -5,6 +5,7 @@ import {
   type ChatMessage as OpenAIChatMessage,
 } from "./openai-service.js";
 import { addChatMessage, getChatHistory } from "./ask-store.js";
+import { getAllMCPTools, executeMCPTool } from "../mcp/manager.js";
 
 export interface AskServiceContext {
   accountId: string; // This is kaySessionId
@@ -44,12 +45,63 @@ export class AskService {
     context: AskServiceContext
   ): Promise<AskResponse> {
     try {
+      const kaySessionId = context.accountId;
+
+      const mcpToolsData = await getAllMCPTools(kaySessionId);
+      const allTools = mcpToolsData.flatMap((data) => data.tools);
+      const tools = allTools.map((tool) => ({
+        type: "function" as const,
+        function: {
+          name: tool.name,
+          ...(tool.description && { description: tool.description }),
+          ...(tool.inputSchema && { parameters: tool.inputSchema }),
+        },
+      }));
+
       const messages: OpenAIChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: context.request.prompt },
       ];
 
-      const result = await createChatCompletion({ messages });
+      let result = await createChatCompletion({ messages, tools });
+
+      while (result.toolCalls.length > 0) {
+        const toolMessages: OpenAIChatMessage[] = [];
+
+        for (const toolCall of result.toolCalls) {
+          try {
+            const toolResult = await executeMCPTool(
+              kaySessionId,
+              toolCall.name,
+              toolCall.arguments
+            );
+
+            toolMessages.push({
+              role: "tool",
+              content: toolResult,
+              tool_call_id: toolCall.id,
+            });
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : "Unknown error";
+            toolMessages.push({
+              role: "tool",
+              content: `Error executing tool: ${errorMessage}`,
+              tool_call_id: toolCall.id,
+            });
+          }
+        }
+
+        messages.push({
+          role: "assistant",
+          content: result.content || "",
+          tool_calls: result.toolCalls,
+        });
+
+        messages.push(...toolMessages);
+
+        result = await createChatCompletion({ messages, tools });
+      }
 
       return {
         status: "completed",
@@ -100,8 +152,18 @@ export class AskService {
     history: Array<{ role: string; content: string }>
   ): Promise<{ message: string; data?: unknown }> {
     try {
-      // Add user message to chat history
       await addChatMessage(kaySessionId, "user", context.request.prompt);
+
+      const mcpToolsData = await getAllMCPTools(kaySessionId);
+      const allTools = mcpToolsData.flatMap((data) => data.tools);
+      const tools = allTools.map((tool) => ({
+        type: "function" as const,
+        function: {
+          name: tool.name,
+          ...(tool.description && { description: tool.description }),
+          ...(tool.inputSchema && { parameters: tool.inputSchema }),
+        },
+      }));
 
       const messages: OpenAIChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
@@ -112,12 +174,49 @@ export class AskService {
         { role: "user", content: context.request.prompt },
       ];
 
-      const result = await createChatCompletion({ messages });
+      let result = await createChatCompletion({ messages, tools });
+
+      while (result.toolCalls.length > 0) {
+        const toolMessages: OpenAIChatMessage[] = [];
+
+        for (const toolCall of result.toolCalls) {
+          try {
+            const toolResult = await executeMCPTool(
+              kaySessionId,
+              toolCall.name,
+              toolCall.arguments
+            );
+
+            toolMessages.push({
+              role: "tool",
+              content: toolResult,
+              tool_call_id: toolCall.id,
+            });
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : "Unknown error";
+            toolMessages.push({
+              role: "tool",
+              content: `Error executing tool: ${errorMessage}`,
+              tool_call_id: toolCall.id,
+            });
+          }
+        }
+
+        messages.push({
+          role: "assistant",
+          content: result.content || "",
+          tool_calls: result.toolCalls,
+        });
+
+        messages.push(...toolMessages);
+
+        result = await createChatCompletion({ messages, tools });
+      }
 
       const assistantMessage =
         result.content || "I'm sorry, I couldn't generate a response.";
 
-      // Add assistant response to chat history
       await addChatMessage(kaySessionId, "assistant", assistantMessage);
 
       return {

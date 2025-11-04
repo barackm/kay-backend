@@ -1,53 +1,77 @@
-import {
-  getKaySessionById,
-  getConnection,
-} from "../../../services/connections/connection-service.js";
 import type { HealthReport } from "../../../types/health.js";
+import { getConnection } from "../../connections/connection-service.js";
 import { ServiceName } from "../../../types/connections.js";
+import { getBitbucketMCPClient } from "../../mcp/manager.js";
 
-export async function checkBitbucket(c: any, health: HealthReport) {
-  const sessionId = c.req.query("session_id") as string | undefined;
-
-  if (!sessionId) {
+export async function checkBitbucket(
+  kaySessionId: string | undefined,
+  health: HealthReport
+): Promise<void> {
+  if (!kaySessionId) {
     health.services.mcp_bitbucket = {
       status: "unhealthy",
-      enabled: true,
+      enabled: false,
       connected: false,
       initialized: false,
-      message: "Missing session_id query parameter",
+      message: "No session ID found",
     };
     return;
   }
 
-  const kaySession = getKaySessionById(sessionId);
-  if (!kaySession) {
+  try {
+    const connection = await getConnection(kaySessionId, ServiceName.BITBUCKET);
+
+    if (!connection) {
+      health.services.mcp_bitbucket = {
+        status: "unhealthy",
+        enabled: false,
+        connected: false,
+        initialized: false,
+        message: "No Bitbucket connection found",
+      };
+      return;
+    }
+
+    const mcpClient = await getBitbucketMCPClient(kaySessionId);
+
+    if (!mcpClient || !mcpClient.isReady()) {
+      health.services.mcp_bitbucket = {
+        status: "unhealthy",
+        enabled: true,
+        connected: true,
+        initialized: false,
+        message: "MCP client not initialized",
+      };
+      return;
+    }
+
+    const tools = mcpClient.getTools();
+
+    health.services.mcp_bitbucket = {
+      status: "healthy",
+      enabled: true,
+      connected: true,
+      initialized: true,
+      toolCount: tools.length,
+      tools: tools.map((tool) => {
+        const toolInfo: { name: string; description?: string } = {
+          name: tool.name,
+        };
+        if (tool.description) {
+          toolInfo.description = tool.description;
+        }
+        return toolInfo;
+      }),
+    };
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     health.services.mcp_bitbucket = {
       status: "unhealthy",
       enabled: true,
-      connected: false,
+      connected: true,
       initialized: false,
-      message: "Invalid session_id",
+      message: `MCP client error: ${errorMessage}`,
     };
-    return;
   }
-
-  const connection = getConnection(sessionId, ServiceName.BITBUCKET);
-  if (!connection) {
-    health.services.mcp_bitbucket = {
-      status: "unhealthy",
-      enabled: true,
-      connected: false,
-      initialized: false,
-      message: "No Bitbucket connection found",
-    };
-    return;
-  }
-
-  health.services.mcp_bitbucket = {
-    status: "disabled",
-    enabled: true,
-    connected: false,
-    initialized: false,
-    message: "MCP integration not yet implemented",
-  };
 }

@@ -30,12 +30,15 @@ export function generateCliSessionToken(kaySessionId: string): string {
   } as jwt.SignOptions);
 }
 
-export function verifyCliSessionToken(token: string): CliSessionPayload {
+export function verifyCliSessionToken(
+  token: string,
+  options?: jwt.VerifyOptions
+): CliSessionPayload {
   const secret = ENV.K_SESSION_SECRET || ENV.JWT_SECRET;
   if (!secret) {
     throw new Error("K_SESSION_SECRET or JWT_SECRET must be configured");
   }
-  return jwt.verify(token, secret) as CliSessionPayload;
+  return jwt.verify(token, secret, options) as CliSessionPayload;
 }
 
 export function generateRefreshToken(): string {

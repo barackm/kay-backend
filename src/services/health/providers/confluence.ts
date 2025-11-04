@@ -1,66 +1,81 @@
-import { refreshAccessTokenIfNeeded } from "../../../services/auth/token-service.js";
 import type { HealthReport } from "../../../types/health.js";
-import { handleError } from "../core.js";
+import { getConnection } from "../../connections/connection-service.js";
+import { ServiceName } from "../../../types/connections.js";
+import { getConfluenceMCPClient } from "../../mcp/manager.js";
 
 export async function checkConfluence(
-  tokens: any,
-  health: HealthReport,
-  allTools: Array<{ name: string; description?: string }>
-) {
-  if (!tokens) {
+  kaySessionId: string | undefined,
+  health: HealthReport
+): Promise<void> {
+  if (!kaySessionId) {
     health.services.confluence = {
       status: "unhealthy",
-      accessible: false,
-      message: "No Atlassian connection found for this session",
+      enabled: false,
+      connected: false,
+      initialized: false,
+      message: "No session ID found",
     };
     return;
   }
 
   try {
-    const resource = tokens.resources.find((r: any) =>
-      r.url.includes("atlassian.net")
+    const connection = await getConnection(
+      kaySessionId,
+      ServiceName.CONFLUENCE
     );
-    if (!resource) {
+
+    if (!connection) {
       health.services.confluence = {
         status: "unhealthy",
-        accessible: false,
-        message: "No Confluence resource found",
+        enabled: false,
+        connected: false,
+        initialized: false,
+        message:
+          "No Atlassian connection found. Please connect Confluence first.",
       };
       return;
     }
 
-    const accessToken = await refreshAccessTokenIfNeeded(tokens);
-    const confluenceUrl = resource.url.replace(
-      ".atlassian.net",
-      ".atlassian.net/wiki"
-    );
+    const mcpClient = await getConfluenceMCPClient(kaySessionId);
 
-    const res = await fetch(`${confluenceUrl}/rest/api/space?limit=10`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!res.ok) {
+    if (!mcpClient || !mcpClient.isReady()) {
       health.services.confluence = {
         status: "unhealthy",
-        accessible: false,
-        message: `Confluence API returned ${res.status}`,
+        enabled: true,
+        connected: true,
+        initialized: false,
+        message: "MCP client not initialized",
       };
       return;
     }
 
-    const data = await res.json();
-    const spaces = data.results || [];
-    const confluenceTools = allTools.filter((t) =>
-      t.name.startsWith("confluence_")
-    );
+    const tools = mcpClient.getTools();
 
     health.services.confluence = {
       status: "healthy",
-      accessible: true,
-      spaceCount: spaces.length,
-      tools: confluenceTools,
+      enabled: true,
+      connected: true,
+      initialized: true,
+      toolCount: tools.length,
+      tools: tools.map((tool) => {
+        const toolInfo: { name: string; description?: string } = {
+          name: tool.name,
+        };
+        if (tool.description) {
+          toolInfo.description = tool.description;
+        }
+        return toolInfo;
+      }),
     };
   } catch (error) {
-    health.services.confluence = handleError(health.services.confluence, error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    health.services.confluence = {
+      status: "unhealthy",
+      enabled: true,
+      connected: true,
+      initialized: false,
+      message: `MCP client error: ${errorMessage}`,
+    };
   }
 }

@@ -76,6 +76,8 @@ export async function storeConnection(
     },
   });
 
+  await prisma.$queryRaw`SELECT 1`;
+
   const result: Connection = {
     id: connection.id,
     kay_session_id: connection.kaySessionId,
@@ -133,6 +135,71 @@ export async function getConnection(
   }
 
   return result;
+}
+
+export async function getValidAccessToken(
+  connection: Connection,
+  serviceName: ServiceName
+): Promise<string> {
+  const now = Date.now();
+  const expiresAt = connection.expires_at || 0;
+
+  if (expiresAt > now + 60000) {
+    return connection.access_token;
+  }
+
+  if (
+    !connection.refresh_token ||
+    (serviceName !== ServiceName.JIRA && serviceName !== ServiceName.CONFLUENCE)
+  ) {
+    return connection.access_token;
+  }
+
+  try {
+    const { ENV } = await import("../../config/env.js");
+    const response = await fetch("https://auth.atlassian.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        client_id: ENV.ATLASSIAN_CLIENT_ID,
+        client_secret: ENV.ATLASSIAN_CLIENT_SECRET,
+        refresh_token: connection.refresh_token,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(
+        `[getValidAccessToken] Token refresh failed for ${serviceName}, using existing token`
+      );
+      return connection.access_token;
+    }
+
+    const data = await response.json();
+    const newAccessToken = data.access_token;
+    const newRefreshToken = data.refresh_token || connection.refresh_token;
+    const newExpiresAt = Date.now() + data.expires_in * 1000;
+
+    await storeConnection(
+      connection.kay_session_id,
+      serviceName,
+      newAccessToken,
+      newRefreshToken,
+      newExpiresAt,
+      connection.metadata
+    );
+
+    console.log(`[getValidAccessToken] Token refreshed for ${serviceName}`);
+    return newAccessToken;
+  } catch (error) {
+    console.warn(
+      `[getValidAccessToken] Token refresh error for ${serviceName}:`,
+      error
+    );
+    return connection.access_token;
+  }
 }
 
 export async function deleteConnection(
@@ -286,12 +353,17 @@ export async function connectAtlassianService(
 
     if (result.resources[0]?.url) {
       metadata.url = result.resources[0].url;
+      metadata.base_url = result.resources[0].url;
     }
 
     if (result.resources[0]?.id) {
       metadata.workspace_id = result.resources[0].id;
+      metadata.cloud_id = result.resources[0].id;
     }
 
+    console.log(
+      `[connectAtlassianService] Storing connection for ${serviceName}, kaySessionId: ${kaySessionId}`
+    );
     const connection = await storeConnection(
       kaySessionId,
       serviceName,
@@ -300,8 +372,16 @@ export async function connectAtlassianService(
       expiresAt,
       metadata
     );
+    console.log(`[connectAtlassianService] Primary connection stored:`, {
+      id: connection.id,
+      serviceName,
+      kaySessionId,
+    });
 
     if (serviceName === ServiceName.JIRA) {
+      console.log(
+        `[connectAtlassianService] Creating shared Confluence connection`
+      );
       await storeConnection(
         kaySessionId,
         ServiceName.CONFLUENCE,
@@ -311,6 +391,7 @@ export async function connectAtlassianService(
         metadata
       );
     } else if (serviceName === ServiceName.CONFLUENCE) {
+      console.log(`[connectAtlassianService] Creating shared Jira connection`);
       await storeConnection(
         kaySessionId,
         ServiceName.JIRA,
@@ -321,6 +402,9 @@ export async function connectAtlassianService(
       );
     }
 
+    console.log(
+      `[connectAtlassianService] All connections stored successfully for ${kaySessionId}`
+    );
     return {
       connection,
       accountId,

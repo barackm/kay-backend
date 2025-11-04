@@ -24,10 +24,12 @@ const sessionRouter = new Hono();
 
 interface InitSessionRequest {
   device_info?: string;
+  session_id?: string;
 }
 
 interface RefreshSessionRequest {
   refresh_token: string;
+  session_id?: string;
 }
 
 sessionRouter.post("/init", async (c) => {
@@ -39,7 +41,19 @@ sessionRouter.post("/init", async (c) => {
     );
     const sessionExpiresInMs = parseDurationToMs(ENV.CLI_SESSION_EXPIRES_IN);
 
-    const kaySessionId = await createKaySession();
+    let kaySessionId: string;
+
+    if (body.session_id) {
+      const existingSession = await getKaySessionById(body.session_id);
+      if (existingSession) {
+        kaySessionId = body.session_id;
+      } else {
+        kaySessionId = await createKaySession();
+      }
+    } else {
+      kaySessionId = await createKaySession();
+    }
+
     const kaySession = await getKaySessionById(kaySessionId);
 
     const sessionToken = generateCliSessionToken(kaySessionId);
@@ -87,39 +101,74 @@ sessionRouter.post("/refresh", async (c) => {
     }
 
     const session = await getCliSessionByRefreshToken(body.refresh_token);
+    let kaySessionId: string | undefined;
 
-    if (!session) {
-      return c.json<ErrorResponse>(
-        {
-          error: ErrorCode.TOKEN_INVALID,
-          code: ErrorCode.TOKEN_INVALID,
-          message: "Invalid refresh token",
-        },
-        403
-      );
+    if (session) {
+      kaySessionId = session.kaySessionId;
+      const now = Date.now();
+      if (now >= session.expires_at) {
+        await deleteCliSessionByRefreshToken(body.refresh_token);
+        kaySessionId = undefined;
+      }
     }
 
-    const now = Date.now();
-    if (now >= session.expires_at) {
-      await deleteCliSessionByRefreshToken(body.refresh_token);
-      return c.json<ErrorResponse>(
-        {
-          error: ErrorCode.TOKEN_EXPIRED,
-          code: ErrorCode.TOKEN_EXPIRED,
-          message: "Refresh token expired",
-        },
-        401
-      );
+    if (!kaySessionId) {
+      if (body.session_id) {
+        const existingSession = await getKaySessionById(body.session_id);
+        if (existingSession) {
+          kaySessionId = body.session_id;
+        } else {
+          return c.json<ErrorResponse>(
+            {
+              error: ErrorCode.TOKEN_EXPIRED,
+              code: ErrorCode.TOKEN_EXPIRED,
+              message:
+                "Refresh token expired and session_id not found. Please initialize a new session.",
+            },
+            401
+          );
+        }
+      } else {
+        return c.json<ErrorResponse>(
+          {
+            error: ErrorCode.TOKEN_EXPIRED,
+            code: ErrorCode.TOKEN_EXPIRED,
+            message:
+              "Refresh token expired. Please provide session_id or initialize a new session.",
+          },
+          401
+        );
+      }
     }
 
-    const kaySessionId = session.kaySessionId;
     const newSessionToken = generateCliSessionToken(kaySessionId);
     const sessionExpiresInMs = parseDurationToMs(ENV.CLI_SESSION_EXPIRES_IN);
-    const newExpiresAt = now + sessionExpiresInMs;
+    const newExpiresAt = Date.now() + sessionExpiresInMs;
 
-    await updateCliSessionToken("", newSessionToken, newExpiresAt);
+    if (session) {
+      await updateCliSessionToken("", newSessionToken, newExpiresAt);
+    } else {
+      const refreshExpiresInMs = validateRefreshTokenExpiration(
+        ENV.CLI_REFRESH_TOKEN_EXPIRES_IN
+      );
+      const newRefreshToken = generateRefreshToken();
+      await storeCliSession(
+        newSessionToken,
+        newRefreshToken,
+        null,
+        refreshExpiresInMs,
+        undefined
+      );
+      return c.json({
+        session_id: kaySessionId,
+        session_token: newSessionToken,
+        refresh_token: newRefreshToken,
+        expires_at: new Date(newExpiresAt).toISOString(),
+      });
+    }
 
     return c.json({
+      session_id: kaySessionId,
       session_token: newSessionToken,
       refresh_token: body.refresh_token,
       expires_at: new Date(newExpiresAt).toISOString(),

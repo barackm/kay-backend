@@ -21,11 +21,29 @@ export function sessionAuthMiddleware() {
     const sessionToken = authHeader.substring(7);
 
     try {
-      const payload = verifyCliSessionToken(sessionToken);
+      let payload;
+      try {
+        payload = verifyCliSessionToken(sessionToken);
+      } catch (verifyError) {
+        if (
+          verifyError instanceof Error &&
+          verifyError.name === "TokenExpiredError"
+        ) {
+          payload = verifyCliSessionToken(sessionToken, {
+            ignoreExpiration: true,
+          });
+        } else {
+          throw verifyError;
+        }
+      }
 
       const session = await getCliSessionBySessionToken(sessionToken);
 
       if (!session) {
+        const kaySessionId = payload.kay_session_id;
+        if (kaySessionId) {
+          c.set("session_id", kaySessionId);
+        }
         return c.json<ErrorResponse>(
           {
             error: ErrorCode.TOKEN_INVALID,
@@ -38,6 +56,10 @@ export function sessionAuthMiddleware() {
 
       const now = Date.now();
       if (now >= session.expires_at) {
+        const kaySessionId = payload.kay_session_id;
+        if (kaySessionId) {
+          c.set("session_id", kaySessionId);
+        }
         return c.json<ErrorResponse>(
           {
             error: ErrorCode.TOKEN_EXPIRED,
@@ -58,6 +80,17 @@ export function sessionAuthMiddleware() {
       await next();
     } catch (error) {
       if (error instanceof Error && error.name === "TokenExpiredError") {
+        try {
+          const payload = verifyCliSessionToken(sessionToken, {
+            ignoreExpiration: true,
+          });
+          const kaySessionId = payload.kay_session_id;
+          if (kaySessionId) {
+            c.set("session_id", kaySessionId);
+          }
+        } catch {
+          // Ignore if we can't extract session_id from expired token
+        }
         return c.json<ErrorResponse>(
           {
             error: ErrorCode.TOKEN_EXPIRED,

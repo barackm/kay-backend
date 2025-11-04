@@ -10,8 +10,13 @@ export function createHealthReport(): HealthReport {
       database: { status: "healthy" },
       openai: { status: "healthy", configured: isOpenAIConfigured() },
       mcp_jira: { status: "disabled", enabled: true },
-      mcp_bitbucket: { status: "disabled", enabled: true },
-      confluence: { status: "healthy", accessible: false },
+      mcp_bitbucket: { status: "disabled", enabled: false },
+      confluence: {
+        status: "unhealthy",
+        enabled: false,
+        connected: false,
+        initialized: false,
+      },
     },
   };
 }
