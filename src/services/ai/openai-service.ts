@@ -40,7 +40,7 @@ export interface ChatCompletionOptions {
       description?: string;
       parameters?: Record<string, unknown>;
     };
-  }>;
+  }> | undefined;
 }
 
 export interface ChatCompletionResult {
@@ -82,10 +82,10 @@ export async function createChatCompletion(
         }
         if (msg.role === "assistant") {
           const assistantMsg: OpenAI.Chat.Completions.ChatCompletionMessageParam =
-            {
-              role: "assistant" as const,
-              content: msg.content,
-            };
+          {
+            role: "assistant" as const,
+            content: msg.content,
+          };
 
           if (msg.tool_calls && msg.tool_calls.length > 0) {
             assistantMsg.tool_calls = msg.tool_calls.map((tc) => ({
@@ -112,16 +112,22 @@ export async function createChatCompletion(
       messages,
       temperature: options.temperature ?? ENV.OPENAI_TEMPERATURE,
       max_tokens: options.max_tokens ?? ENV.OPENAI_MAX_TOKENS,
-    };
+    }
 
     if (options.tools && options.tools.length > 0) {
       requestParams.tools =
         options.tools as OpenAI.Chat.Completions.ChatCompletionTool[];
     }
 
+    console.log(`[OpenAI] Calling with ${options.tools?.length || 0} tools available`);
     const response = await client.chat.completions.create(requestParams);
 
     const message = response.choices[0]?.message;
+    console.log(`[OpenAI] Finish reason: ${response.choices[0]?.finish_reason}`);
+    console.log(`[OpenAI] Has tool_calls: ${!!message?.tool_calls}`);
+    if (message?.content) {
+      console.log(`[OpenAI] Content preview: ${message.content.substring(0, 100)}...`);
+    }
 
     const toolCalls: Array<{
       id: string;
@@ -149,9 +155,9 @@ export async function createChatCompletion(
       | "content_filter"
       | null =
       finishReason === "stop" ||
-      finishReason === "length" ||
-      finishReason === "tool_calls" ||
-      finishReason === "content_filter"
+        finishReason === "length" ||
+        finishReason === "tool_calls" ||
+        finishReason === "content_filter"
         ? finishReason
         : null;
 

@@ -17,7 +17,6 @@ import serviceCallbacksRouter from "./routes/service-callbacks.js";
 import sessionRouter from "./routes/session.js";
 import "./types/hono.js";
 import { cleanupExpiredSessions } from "./services/database/db-store.js";
-import { cleanupMCPClients } from "./services/mcp/manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -52,13 +51,12 @@ setInterval(() => {
   cleanupExpiredSessions().catch(console.error);
 }, 24 * 60 * 60 * 1000);
 
+// MCP cleanup removed - will be re-added with new implementation
 process.on("SIGINT", () => {
-  cleanupMCPClients();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  cleanupMCPClients();
   process.exit(0);
 });
 

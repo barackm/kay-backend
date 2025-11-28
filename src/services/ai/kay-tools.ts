@@ -39,12 +39,7 @@ export async function executeKayConnectionStatus(
   if (!kaySessionId) {
     return {
       connected: [],
-      disconnected: [
-        ServiceName.KYG,
-        ServiceName.JIRA,
-        ServiceName.CONFLUENCE,
-        ServiceName.BITBUCKET,
-      ],
+      disconnected: [ServiceName.KYG, ServiceName.BITBUCKET],
     };
   }
 
