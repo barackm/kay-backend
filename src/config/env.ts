@@ -1,28 +1,18 @@
-import { config } from "dotenv";
+import { z } from "zod";
+import dotenv from "dotenv";
 
-config();
+dotenv.config();
 
-export const ENV = {
-  PORT: Number(process.env.PORT) || 4000,
-  JWT_SECRET: process.env.JWT_SECRET || "your-secret-key-change-in-production",
-  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
-  K_SESSION_SECRET: process.env.K_SESSION_SECRET || process.env.JWT_SECRET,
-  CLI_SESSION_EXPIRES_IN: process.env.CLI_SESSION_EXPIRES_IN || "10m",
-  CLI_REFRESH_TOKEN_EXPIRES_IN:
-    process.env.CLI_REFRESH_TOKEN_EXPIRES_IN || "7d",
-  ATLASSIAN_CLIENT_ID: process.env.ATLASSIAN_CLIENT_ID || "",
-  ATLASSIAN_CLIENT_SECRET: process.env.ATLASSIAN_CLIENT_SECRET || "",
-  ATLASSIAN_CALLBACK_URL:
-    process.env.ATLASSIAN_CALLBACK_URL ||
-    "http://localhost:4000/connections/oauth/callback",
-  BITBUCKET_CLIENT_ID: process.env.BITBUCKET_CLIENT_ID || "",
-  BITBUCKET_CLIENT_SECRET: process.env.BITBUCKET_CLIENT_SECRET || "",
-  BITBUCKET_CALLBACK_URL:
-    process.env.BITBUCKET_CALLBACK_URL ||
-    "http://localhost:4000/connections/oauth/callback",
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-  OPENAI_MODEL: process.env.OPENAI_MODEL || "gpt-4o-mini",
-  OPENAI_MAX_TOKENS: Number(process.env.OPENAI_MAX_TOKENS) || 2000,
-  OPENAI_TEMPERATURE: Number(process.env.OPENAI_TEMPERATURE) || 0.7,
-  KYG_CORE_BASE_URL: process.env.KYG_CORE_BASE_URL || "",
-};
+const envSchema = z.object({
+  PORT: z.coerce.number().default(3000),
+  API_BASE_URL: z.string().pipe(z.url()).optional(),
+  BEARER_TOKEN: z.string().min(1).optional(),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  throw new Error(`Invalid environment variables: ${parsed.error.message}`);
+}
+
+export const ENV = parsed.data;

@@ -6,11 +6,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "generate-server-tools": "tsx scripts/generate-server-tools.ts",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "inspector": "cross-env DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +15,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^2.0.68",
     "@hono/node-server": "^1.19.6",
+    "@hono/swagger-ui": "^0.5.2",
     "@modelcontextprotocol/sdk": "^1.20.2",
     "@prisma/client": "^5.20.0",
     "ai": "^5.0.95",
@@ -34,6 +31,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.9.2",
+    "cross-env": "^10.1.0",
     "prisma": "^5.20.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"

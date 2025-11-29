@@ -1,64 +1,32 @@
 import { Hono } from "hono";
-import { logger } from "hono/logger";
-import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
-import { readFileSync } from "fs";
-import { join } from "path";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
+import { swaggerUI } from "@hono/swagger-ui";
 import { ENV } from "./config/env.js";
-import "./db/client.js"; // Initialize Prisma client
-import authRouter from "./routes/auth.js";
-import authStatusRouter from "./routes/auth-status.js";
-import askRouter from "./routes/ask.js";
-import healthRouter from "./routes/health.js";
-import connectionsRouter from "./routes/connections.js";
-import serviceCallbacksRouter from "./routes/service-callbacks.js";
-import sessionRouter from "./routes/session.js";
-import "./types/hono.js";
-import { cleanupExpiredSessions } from "./services/database/db-store.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { getOpenAPISpec } from "./config/openapi.js";
+import { createHealthRouter } from "./routes/health.js";
+import { createMcpRouter } from "./routes/mcp.js";
+import { MCPServerRegistry } from "./services/mcp/server-registry.js";
 
 const app = new Hono();
+const registry = new MCPServerRegistry();
 
-app.use("*", logger());
-app.use("*", cors());
-
-app.get("/", (c) => c.json({ message: "Kay Backend running ✅" }));
-
-app.route("/health", healthRouter);
-
-app.get("/assets/images/logo_orange_kay.png", (c) => {
-  const logoPath = join(__dirname, "assets/images/logo_orange_kay.png");
-  const logo = readFileSync(logoPath);
-  return c.body(logo, 200, {
-    "Content-Type": "image/png",
-  });
+app.get("/", (c) => {
+  return c.json({ message: "Welcome to Kay Backend" });
 });
 
-app.route("/auth", authRouter);
-app.route("/auth", authStatusRouter);
-app.route("/", askRouter);
-app.route("/connections", connectionsRouter);
-app.route("/connections", serviceCallbacksRouter);
-app.route("/session", sessionRouter);
+app.get(
+  "/api",
+  swaggerUI({
+    url: "/openapi.json",
+  })
+);
 
-// Cleanup expired sessions on startup and daily
-cleanupExpiredSessions().catch(console.error);
-setInterval(() => {
-  cleanupExpiredSessions().catch(console.error);
-}, 24 * 60 * 60 * 1000);
-
-// MCP cleanup removed - will be re-added with new implementation
-process.on("SIGINT", () => {
-  process.exit(0);
+app.get("/openapi.json", (c) => {
+  return c.json(getOpenAPISpec());
 });
 
-process.on("SIGTERM", () => {
-  process.exit(0);
-});
+app.route("/health", createHealthRouter(registry));
+app.route("/mcp", createMcpRouter(registry));
 
 serve({
   fetch: app.fetch,
