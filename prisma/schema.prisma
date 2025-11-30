@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  externalUserId Int      @map("external_user_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  serverCredentials  UserServerCredential[]
+
+  @@index([externalUserId])
+  @@map("users")
+}
+
+model McpServer {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  npmPackage    String?
+  localPath     String?
+  requiredEnvVars Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  credentials   UserServerCredential[]
+
+  @@map("mcp_servers")
+}
+
+model UserServerCredential {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  serverId        String   @map("server_id")
+  encryptedEnvVars String  @map("encrypted_env_vars")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  server McpServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
+  @@index([userId])
+  @@map("user_server_credentials")
+}

@@ -14,26 +14,25 @@ export interface ServerMapping {
 }
 
 const SERVER_MAPPINGS: ServerMapping = {
-  kmesh: "kyg-kmesh-mcp-server",
+  "kyg-kmesh": "kyg-kmesh-mcp-server",
 };
 
 export class MCPServerRegistry {
-  private connections: Map<string, MCPClient> = new Map();
-  private configs: Map<string, ServerConfig> = new Map();
+  private connections: Map<string, Map<string, MCPClient>> = new Map();
+  private configs: Map<string, Map<string, ServerConfig>> = new Map();
 
-  async connect(config: ServerConfig): Promise<void> {
-    if (this.connections.has(config.name)) {
+  async connect(userId: string, config: ServerConfig): Promise<void> {
+    const userConnections = this.connections.get(userId) || new Map();
+    const userConfigs = this.configs.get(userId) || new Map();
+
+    if (userConnections.has(config.name)) {
       throw new Error(`Server ${config.name} is already connected`);
     }
 
     const serverPath = config.path || SERVER_MAPPINGS[config.name];
     if (!serverPath) {
       throw new Error(
-        `Server ${
-          config.name
-        } not found in mappings. Available servers: ${Object.keys(
-          SERVER_MAPPINGS
-        ).join(", ")}`
+        `Server ${config.name} not found. Please provide a path or ensure server is configured.`
       );
     }
 
@@ -44,51 +43,78 @@ export class MCPServerRegistry {
       ...(config.env || {}),
     };
 
-    if (ENV.API_BASE_URL) {
+    if (ENV.API_BASE_URL && !serverEnv.API_BASE_URL) {
       serverEnv.API_BASE_URL = ENV.API_BASE_URL;
     }
 
-    if (ENV.BEARER_TOKEN) {
+    if (ENV.BEARER_TOKEN && !serverEnv.BEARER_TOKEN) {
       serverEnv.BEARER_TOKEN = ENV.BEARER_TOKEN;
     }
 
-    await client.connect(resolvedPath, serverEnv);
-    this.connections.set(config.name, client);
-    this.configs.set(config.name, {
-      name: config.name,
-      path: resolvedPath,
-      ...(config.env && { env: config.env }),
-    });
+    try {
+      await client.connect(resolvedPath, serverEnv);
+      userConnections.set(config.name, client);
+      userConfigs.set(config.name, {
+        name: config.name,
+        path: resolvedPath,
+        ...(config.env && { env: config.env }),
+      });
+
+      this.connections.set(userId, userConnections);
+      this.configs.set(userId, userConfigs);
+    } catch (error) {
+      await client.disconnect().catch(() => {});
+      throw error;
+    }
   }
 
-  getClient(name: string): MCPClient {
-    const client = this.connections.get(name);
+  getClient(userId: string, name: string): MCPClient {
+    const userConnections = this.connections.get(userId);
+    if (!userConnections) {
+      throw new Error(`No connections found for user`);
+    }
+    const client = userConnections.get(name);
     if (!client) {
       throw new Error(`Server ${name} is not connected`);
     }
     return client;
   }
 
-  async disconnect(name: string): Promise<void> {
-    const client = this.connections.get(name);
+  async disconnect(userId: string, name: string): Promise<void> {
+    const userConnections = this.connections.get(userId);
+    if (!userConnections) {
+      throw new Error(`No connections found for user`);
+    }
+    const client = userConnections.get(name);
     if (!client) {
       throw new Error(`Server ${name} is not connected`);
     }
     await client.disconnect();
-    this.connections.delete(name);
-    this.configs.delete(name);
+    userConnections.delete(name);
+    if (userConnections.size === 0) {
+      this.connections.delete(userId);
+      this.configs.delete(userId);
+    }
   }
 
-  getServerConfig(name: string): ServerConfig {
-    const config = this.configs.get(name);
+  getServerConfig(userId: string, name: string): ServerConfig {
+    const userConfigs = this.configs.get(userId);
+    if (!userConfigs) {
+      throw new Error(`No connections found for user`);
+    }
+    const config = userConfigs.get(name);
     if (!config) {
       throw new Error(`Server ${name} is not connected`);
     }
     return config;
   }
 
-  listConnections(): string[] {
-    return Array.from(this.connections.keys());
+  listConnections(userId: string): string[] {
+    const userConnections = this.connections.get(userId);
+    if (!userConnections) {
+      return [];
+    }
+    return Array.from(userConnections.keys());
   }
 
   private resolveServerPath(path: string): string {
@@ -119,6 +145,18 @@ export class MCPServerRegistry {
       return npmPathAlt;
     }
 
+    const npmPathBuild = resolve(
+      process.cwd(),
+      "node_modules",
+      path,
+      "build",
+      "index.js"
+    );
+    if (existsSync(npmPathBuild)) {
+      return npmPathBuild;
+    }
+
+    // Handle local/sibling directories
     const siblingPath = resolve(process.cwd(), "..", path, "dist", "index.js");
     if (existsSync(siblingPath)) {
       return siblingPath;
@@ -130,7 +168,7 @@ export class MCPServerRegistry {
     }
 
     throw new Error(
-      `Server path not found: ${path}. Tried: ${npmPath}, ${npmPathAlt}, ${siblingPath}, ${siblingPathAlt}`
+      `Server path not found: ${path}. Tried: ${npmPath}, ${npmPathAlt}, ${npmPathBuild}, ${siblingPath}, ${siblingPathAlt}`
     );
   }
 }

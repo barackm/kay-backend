@@ -5,10 +5,14 @@ import { ENV } from "./config/env.js";
 import { getOpenAPISpec } from "./config/openapi.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createMcpRouter } from "./routes/mcp.js";
+import { createAuthRouter } from "./routes/auth.js";
 import { MCPServerRegistry } from "./services/mcp/server-registry.js";
+import { authMiddleware } from "./services/auth/middleware.js";
 
 const app = new Hono();
 const registry = new MCPServerRegistry();
+
+app.use("*", authMiddleware);
 
 app.get("/", (c) => {
   return c.json({ message: "Welcome to Kay Backend" });
@@ -18,6 +22,7 @@ app.get(
   "/api",
   swaggerUI({
     url: "/openapi.json",
+    persistAuthorization: true,
   })
 );
 
@@ -25,6 +30,7 @@ app.get("/openapi.json", (c) => {
   return c.json(getOpenAPISpec());
 });
 
+app.route("/auth", createAuthRouter());
 app.route("/health", createHealthRouter(registry));
 app.route("/mcp", createMcpRouter(registry));
 
