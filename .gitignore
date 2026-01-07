@@ -8,3 +8,6 @@ data/
 /prisma/migrations/
 
 /generated/prisma
+
+# Claude Code plans and temporary files
+.claude/
