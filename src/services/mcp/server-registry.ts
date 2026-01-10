@@ -20,7 +20,8 @@ const SERVER_MAPPINGS: ServerMapping = {
 export class MCPServerRegistry {
   private connections: Map<string, Map<string, MCPClient>> = new Map();
   private configs: Map<string, Map<string, ServerConfig>> = new Map();
-  private connectionPromises: Map<string, Map<string, Promise<void>>> = new Map();
+  private connectionPromises: Map<string, Map<string, Promise<void>>> =
+    new Map();
 
   /**
    * Get or create a connection to an MCP server for a user.
@@ -34,19 +35,28 @@ export class MCPServerRegistry {
 
     // If already connected, return immediately
     if (userConnections.has(config.name)) {
-      console.log(`[Registry] ${config.name} already connected for user ${userId}`);
+      console.log(
+        `[Registry] ${config.name} already connected for user ${userId}`
+      );
       return;
     }
 
     // If connection is in progress, wait for it
     if (userPromises.has(config.name)) {
-      console.log(`[Registry] ${config.name} connection in progress, waiting...`);
+      console.log(
+        `[Registry] ${config.name} connection in progress, waiting...`
+      );
       await userPromises.get(config.name);
       return;
     }
 
     // Start new connection
-    const connectionPromise = this._createConnection(userId, config, userConnections, userConfigs);
+    const connectionPromise = this._createConnection(
+      userId,
+      config,
+      userConnections,
+      userConfigs
+    );
     userPromises.set(config.name, connectionPromise);
     this.connectionPromises.set(userId, userPromises);
 
@@ -66,7 +76,6 @@ export class MCPServerRegistry {
     userConnections: Map<string, MCPClient>,
     userConfigs: Map<string, ServerConfig>
   ): Promise<void> {
-
     const serverPath = config.path || SERVER_MAPPINGS[config.name];
     if (!serverPath) {
       throw new Error(
@@ -81,6 +90,12 @@ export class MCPServerRegistry {
     const serverEnv: Record<string, string> = {
       ...(config.env || {}),
     };
+
+    if (config.name === "jira") {
+      if (serverEnv.JIRA_HOST && !serverEnv.JIRA_BASE_URL) {
+        serverEnv.JIRA_BASE_URL = serverEnv.JIRA_HOST;
+      }
+    }
 
     if (ENV.API_BASE_URL && !serverEnv.API_BASE_URL) {
       serverEnv.API_BASE_URL = ENV.API_BASE_URL;
@@ -104,7 +119,7 @@ export class MCPServerRegistry {
     );
 
     try {
-      await client.connect(resolvedPath, serverEnv);
+      await client.connect(resolvedPath, serverEnv, config.name);
       userConnections.set(config.name, client);
       userConfigs.set(config.name, {
         name: config.name,
@@ -184,7 +199,10 @@ export class MCPServerRegistry {
   /**
    * Get or create a connection, ensuring the server is ready to use
    */
-  async ensureConnected(userId: string, config: ServerConfig): Promise<MCPClient> {
+  async ensureConnected(
+    userId: string,
+    config: ServerConfig
+  ): Promise<MCPClient> {
     await this.connect(userId, config);
     return this.getClient(userId, config.name);
   }

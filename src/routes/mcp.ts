@@ -4,21 +4,9 @@ import { prisma } from "../db/client.js";
 import { encrypt, decrypt } from "../services/encryption.js";
 
 // Schemas
-const McpServerSchema = z
-  .object({
-    id: z.string().uuid(),
-    name: z.string(),
-    npmPackage: z.string().nullable(),
-    localPath: z.string().nullable(),
-    requiredEnvVars: z.array(z.string()),
-  })
-  .openapi("McpServer");
-
-const AvailableServersResponseSchema = z
-  .object({
-    servers: z.array(McpServerSchema),
-  })
-  .openapi("AvailableServersResponse");
+const McpServerNameSchema = z
+  .enum(["jira", "bitbucket", "confluence", "kyg-kmesh"])
+  .openapi({ example: "jira" });
 
 const ToolSchema = z.object({
   name: z.string(),
@@ -26,17 +14,28 @@ const ToolSchema = z.object({
   inputSchema: z.unknown().optional(),
 });
 
-const ToolsResponseSchema = z
+const ServerStatusResponseSchema = z
   .object({
-    server: z.string(),
+    serverName: z.string(),
+    connected: z.boolean(),
     tools: z.array(ToolSchema),
-    count: z.number(),
   })
-  .openapi("ToolsResponse");
+  .openapi("ServerStatusResponse");
 
 const ConnectRequestSchema = z
   .object({
-    env: z.record(z.string(), z.string()).optional(),
+    env: z
+      .record(z.string(), z.string())
+      .optional()
+      .openapi({
+        description:
+          "Environment variables for the MCP server. Required variables depend on the server type.",
+        example: {
+          JIRA_HOST: "your-instance.atlassian.net",
+          JIRA_EMAIL: "user@example.com",
+          JIRA_API_TOKEN: "your-api-token",
+        },
+      }),
   })
   .openapi("ConnectRequest");
 
@@ -45,8 +44,6 @@ const ConnectResponseSchema = z
     message: z.string(),
   })
   .openapi("ConnectResponse");
-
-const ToolCallResponseSchema = z.unknown().openapi("ToolCallResponse");
 
 const DeleteResponseSchema = z
   .object({
@@ -59,59 +56,30 @@ const ErrorResponseSchema = z.object({
 });
 
 // Routes
-const listAvailableServersRoute = createRoute({
+const serverStatusRoute = createRoute({
   method: "get",
-  path: "/servers/available",
+  path: "/servers/{name}/status",
   tags: ["MCP"],
-  summary: "List available MCP servers",
-  description: "Get list of all available MCP servers",
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: "List of available servers",
-      content: {
-        "application/json": {
-          schema: AvailableServersResponseSchema,
-        },
-      },
-    },
-    500: {
-      description: "Server error",
-      content: {
-        "application/json": {
-          schema: ErrorResponseSchema,
-        },
-      },
-    },
-  },
-});
-
-const listToolsRoute = createRoute({
-  method: "get",
-  path: "/servers/{name}/tools",
-  tags: ["MCP"],
-  summary: "List tools from an MCP server",
+  summary: "Get server connection status and available tools",
   description:
-    "Get a list of all available tools from a connected MCP server, including their descriptions and input schemas",
+    "Get the connection status of an MCP server and list all available tools with their descriptions and input schemas. Serves as both health check and tool discovery endpoint.",
   security: [{ bearerAuth: [] }],
   request: {
     params: z.object({
-      name: z
-        .enum(["jira", "bitbucket", "confluence", "kyg-kmesh"])
-        .openapi({ example: "jira" }),
+      name: McpServerNameSchema,
     }),
   },
   responses: {
     200: {
-      description: "List of tools with schemas",
+      description: "Server status and available tools",
       content: {
         "application/json": {
-          schema: ToolsResponseSchema,
+          schema: ServerStatusResponseSchema,
         },
       },
     },
     404: {
-      description: "Server not found or credentials not found",
+      description: "Server not found or not connected",
       content: {
         "application/json": {
           schema: ErrorResponseSchema,
@@ -119,7 +87,7 @@ const listToolsRoute = createRoute({
       },
     },
     500: {
-      description: "Failed to connect or list tools",
+      description: "Failed to check status or list tools",
       content: {
         "application/json": {
           schema: ErrorResponseSchema,
@@ -134,17 +102,30 @@ const connectRoute = createRoute({
   path: "/connect/{serverName}",
   tags: ["MCP"],
   summary: "Connect to an MCP server",
-  description:
-    "Connect to an MCP server. If credentials are provided in the request body, they will be saved and then used to connect. If credentials are not provided, previously saved credentials will be used.",
+  description: `Connect to an MCP server. If credentials are provided in the request body, they will be saved and then used to connect. If credentials are not provided, previously saved credentials will be used.
+
+Required environment variables by server:
+- **jira**: JIRA_HOST (will be mapped to JIRA_BASE_URL), JIRA_EMAIL, JIRA_API_TOKEN
+- **bitbucket**: BITBUCKET_USERNAME, BITBUCKET_APP_PASSWORD
+- **confluence**: CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
+- **kyg-kmesh**: API_BASE_URL, BEARER_TOKEN`,
   security: [{ bearerAuth: [] }],
   request: {
     params: z.object({
-      serverName: z.enum(["jira", "bitbucket", "confluence", "kyg-kmesh"]),
+      serverName: McpServerNameSchema,
     }),
     body: {
       content: {
         "application/json": {
-          schema: ConnectRequestSchema,
+          schema: ConnectRequestSchema.openapi({
+            example: {
+              env: {
+                JIRA_HOST: "your-instance.atlassian.net",
+                JIRA_EMAIL: "user@example.com",
+                JIRA_API_TOKEN: "your-api-token",
+              },
+            },
+          }),
         },
       },
     },
@@ -185,66 +166,17 @@ const connectRoute = createRoute({
   },
 });
 
-const callToolRoute = createRoute({
-  method: "post",
-  path: "/servers/{name}/tools/{toolName}",
-  tags: ["MCP"],
-  summary: "Call a tool on an MCP server",
-  description: "Execute a tool on a connected MCP server",
-  security: [{ bearerAuth: [] }],
-  request: {
-    params: z.object({
-      name: z.enum(["jira", "bitbucket", "confluence", "kyg-kmesh"]),
-      toolName: z.string().openapi({ example: "jira_get" }),
-    }),
-    body: {
-      content: {
-        "application/json": {
-          schema: z.record(z.string(), z.unknown()).openapi({
-            description: "Tool arguments",
-          }),
-        },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: "Tool executed successfully",
-      content: {
-        "application/json": {
-          schema: ToolCallResponseSchema,
-        },
-      },
-    },
-    404: {
-      description: "Server not found or credentials not found",
-      content: {
-        "application/json": {
-          schema: ErrorResponseSchema,
-        },
-      },
-    },
-    500: {
-      description: "Tool execution failed",
-      content: {
-        "application/json": {
-          schema: ErrorResponseSchema,
-        },
-      },
-    },
-  },
-});
-
 const disconnectRoute = createRoute({
   method: "delete",
   path: "/servers/{name}",
   tags: ["MCP"],
   summary: "Disconnect from an MCP server",
-  description: "Disconnect from a connected MCP server and remove saved credentials",
+  description:
+    "Disconnect from a connected MCP server and remove saved credentials",
   security: [{ bearerAuth: [] }],
   request: {
     params: z.object({
-      name: z.enum(["jira", "bitbucket", "confluence", "kyg-kmesh"]),
+      name: McpServerNameSchema,
     }),
   },
   responses: {
@@ -278,27 +210,8 @@ const disconnectRoute = createRoute({
 export function createMcpRouter(registry: MCPServerRegistry) {
   const router = new OpenAPIHono();
 
-  router.openapi(listAvailableServersRoute, async (c) => {
-    try {
-      const servers = await prisma.mcpServer.findMany({
-        select: {
-          id: true,
-          name: true,
-          npmPackage: true,
-          localPath: true,
-          requiredEnvVars: true,
-        },
-      });
-      return c.json({ servers });
-    } catch (error) {
-      return c.json(
-        { error: error instanceof Error ? error.message : "Unknown error" },
-        500
-      );
-    }
-  });
-
-  router.openapi(listToolsRoute, async (c) => {
+  // @ts-ignore - Hono OpenAPI type inference limitation with try-catch returning multiple status codes
+  router.openapi(serverStatusRoute, async (c) => {
     try {
       const user = c.get("user");
       const { name } = c.req.valid("param");
@@ -371,14 +284,14 @@ export function createMcpRouter(registry: MCPServerRegistry) {
         : [];
 
       console.log(
-        `[Route] Tools for ${name}:`,
+        `[Route] Status check for ${name}:`,
         JSON.stringify(tools, null, 2)
       );
 
       return c.json({
-        server: name,
+        serverName: name,
+        connected: true,
         tools,
-        count: tools.length,
       });
     } catch (error) {
       return c.json(
@@ -388,6 +301,7 @@ export function createMcpRouter(registry: MCPServerRegistry) {
     }
   });
 
+  // @ts-ignore - Hono OpenAPI type inference limitation with try-catch returning multiple status codes
   router.openapi(connectRoute, async (c) => {
     try {
       const user = c.get("user");
@@ -542,63 +456,7 @@ export function createMcpRouter(registry: MCPServerRegistry) {
     }
   });
 
-  router.openapi(callToolRoute, async (c) => {
-    try {
-      const user = c.get("user");
-      const { name, toolName } = c.req.valid("param");
-      const args = c.req.valid("json");
-
-      const server = await prisma.mcpServer.findUnique({
-        where: { name },
-      });
-
-      if (!server) {
-        return c.json({ error: `Server ${name} not found` }, 404);
-      }
-
-      const credential = await prisma.userServerCredential.findUnique({
-        where: {
-          userId_serverId: {
-            userId: user.id,
-            serverId: server.id,
-          },
-        },
-      });
-
-      if (!credential) {
-        return c.json(
-          { error: `Credentials not found for ${name}. Please connect first.` },
-          404
-        );
-      }
-
-      const envVars = JSON.parse(decrypt(credential.encryptedEnvVars));
-      if (!envVars.BEARER_TOKEN) {
-        envVars.BEARER_TOKEN = user.token;
-      }
-
-      const serverPath = server.npmPackage || server.localPath;
-      if (!serverPath) {
-        return c.json({ error: `Server path not configured for ${name}` }, 500);
-      }
-
-      const client = await registry.ensureConnected(user.id, {
-        name,
-        path: serverPath,
-        env: envVars,
-      });
-
-      const result = await client.callTool(toolName, args);
-
-      return c.json(result);
-    } catch (error) {
-      return c.json(
-        { error: error instanceof Error ? error.message : "Unknown error" },
-        500
-      );
-    }
-  });
-
+  // @ts-ignore - Hono OpenAPI type inference limitation with try-catch returning multiple status codes
   router.openapi(disconnectRoute, async (c) => {
     try {
       const user = c.get("user");

@@ -17,6 +17,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### TypeScript
 - `npx tsc --noEmit` - Type check without building
 
+### Testing MCP Tools
+- `npx tsx src/test-tools.ts <userId> <serverName> <toolName> <argsJson>` - Test individual MCP tools directly
+  - Example: `npx tsx src/test-tools.ts user-uuid-123 jira get_issue '{"issueKey":"PROJ-123"}'`
+  - User must have connected to the server first (via API) to save credentials
+
+## Coding Guidelines
+
+### TypeScript Type Safety
+- **NEVER use `any` type** - it defeats the purpose of TypeScript and hides bugs
+- When facing type inference issues with `@hono/zod-openapi`:
+  - Use `@ts-ignore` with a descriptive comment explaining the limitation
+  - This is acceptable for known library limitations (e.g., try-catch blocks with multiple response status codes)
+  - Example:
+    ```typescript
+    // @ts-ignore - Hono OpenAPI type inference limitation with try-catch returning multiple status codes
+    router.openapi(routeConfig, async (c) => {
+      try {
+        return c.json({ data }, 200);
+      } catch (error) {
+        return c.json({ error: error.message }, 500);
+      }
+    });
+    ```
+- Prefer explicit type annotations over type assertions when possible
+- Use `as` type assertions sparingly and only when you're certain of the type
+
 ## Architecture Overview
 
 ### Core Purpose
@@ -88,3 +114,40 @@ The chat endpoint supports two modes:
 - **Streaming** (`/ask?interactive=true`): Streams responses in real-time but tool results go to client, not back to AI. Use for read operations.
 
 See [AI_TOOL_CALLING_FIXES.md](AI_TOOL_CALLING_FIXES.md) for detailed explanation of the multi-round tool calling implementation.
+
+## API Routes
+
+The backend exposes a simplified set of 5 essential API endpoints:
+
+### Authentication Routes (`/auth`)
+- `POST /auth/login` - Authenticate with external KYG API and get Bearer token
+- `GET /auth/me` - Get current authenticated user information
+
+### MCP Server Management Routes (`/mcp`)
+- `POST /mcp/connect/{serverName}` - Connect to an MCP server (saves credentials if provided)
+  - Supported servers: `jira`, `bitbucket`, `confluence`, `kyg-kmesh`
+  - Request body: `{ "env": { "KEY": "value", ... } }` (optional if credentials already saved)
+
+- `GET /mcp/servers/{name}/status` - Get server connection status and available tools
+  - Returns: `{ "serverName": "...", "connected": true, "tools": [...] }`
+  - Serves as both health check and tool discovery endpoint
+
+- `DELETE /mcp/servers/{name}` - Disconnect from server and remove saved credentials
+
+### Chat Routes (`/`)
+- `POST /ask?interactive=true|false` - AI chat with automatic MCP tool calling
+  - Request body: `{ "message": "..." }` OR `{ "messages": [...] }`
+  - `interactive=false` (default): Non-streaming with multi-round tool calling
+  - `interactive=true`: Server-Sent Events streaming
+
+### Auto-generated Routes
+- `GET /openapi.json` - OpenAPI specification
+- `GET /api` - Swagger UI documentation
+
+### Tool Testing
+For manual tool testing outside of the API, use the standalone script:
+```bash
+npx tsx src/test-tools.ts <userId> <serverName> <toolName> <argsJson>
+```
+
+This approach keeps the API surface clean while still allowing direct tool testing for troubleshooting.

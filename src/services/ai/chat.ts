@@ -3,6 +3,7 @@ import { ENV } from "../../config/env.js";
 import { MCPServerRegistry } from "../mcp/server-registry.js";
 import { getAvailableTools, callMcpTool } from "./mcp-tools.js";
 import { SYSTEM_PROMPT } from "./prompts.js";
+import { gatherProactiveContext } from "./context.js";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -55,7 +56,15 @@ export async function createChatResponse(
     throw new Error("message or messages is required");
   }
 
+  // First, get available tools (this establishes MCP connections)
   const availableTools = await getAvailableTools(user.id, registry);
+
+  // Then gather proactive context from now-connected MCP servers
+  const proactiveContext = await gatherProactiveContext(
+    user.id,
+    user.token,
+    registry
+  );
 
   const functions = [];
 
@@ -75,11 +84,18 @@ export async function createChatResponse(
     });
   }
 
+  // Build system prompt with dynamic context
+  const systemPromptWithContext = proactiveContext
+    ? `${SYSTEM_PROMPT}\n${proactiveContext}`
+    : SYSTEM_PROMPT;
+
+  console.log(`[Chat] System prompt length: ${systemPromptWithContext.length}, has context: ${!!proactiveContext}`);
+
   const messages: Array<{
     role: "system" | "user" | "assistant";
     content: string;
   }> = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPromptWithContext },
     ...(
       request.messages || [
         { role: "user" as const, content: request.message || "" },

@@ -9,51 +9,59 @@ const prisma = new PrismaClient({ adapter });
 async function main() {
   console.log("Seeding MCP servers...");
 
-  // Jira
   await prisma.mcpServer.upsert({
     where: { name: "jira" },
-    update: {},
+    update: {
+      npmPackage: "@orengrinker/jira-mcp-server",
+      localPath: null,
+      requiredEnvVars: ["JIRA_HOST", "JIRA_EMAIL", "JIRA_API_TOKEN"],
+    },
     create: {
       name: "jira",
-      npmPackage: "@aashari/mcp-server-atlassian-jira",
+      npmPackage: "@orengrinker/jira-mcp-server",
       localPath: null,
-      requiredEnvVars: [
-        "ATLASSIAN_SITE_NAME",
-        "ATLASSIAN_USER_EMAIL",
-        "ATLASSIAN_API_TOKEN",
-      ],
+      requiredEnvVars: ["JIRA_HOST", "JIRA_EMAIL", "JIRA_API_TOKEN"],
     },
   });
 
-  // Bitbucket
   await prisma.mcpServer.upsert({
     where: { name: "bitbucket" },
-    update: {},
+    update: {
+      npmPackage: "bitbucket-mcp",
+      localPath: null,
+      requiredEnvVars: ["BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
+    },
     create: {
       name: "bitbucket",
-      npmPackage: "@aashari/mcp-server-atlassian-bitbucket",
+      npmPackage: "bitbucket-mcp",
       localPath: null,
-      requiredEnvVars: ["ATLASSIAN_USER_EMAIL", "ATLASSIAN_API_TOKEN"],
+      requiredEnvVars: ["BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
     },
   });
 
-  // Confluence
   await prisma.mcpServer.upsert({
     where: { name: "confluence" },
-    update: {},
-    create: {
-      name: "confluence",
-      npmPackage: "@aashari/mcp-server-atlassian-confluence",
+    update: {
+      npmPackage: "confluence-mcp",
       localPath: null,
       requiredEnvVars: [
-        "ATLASSIAN_SITE_NAME",
-        "ATLASSIAN_USER_EMAIL",
-        "ATLASSIAN_API_TOKEN",
+        "CONFLUENCE_URL",
+        "CONFLUENCE_USERNAME",
+        "CONFLUENCE_API_TOKEN",
+      ],
+    },
+    create: {
+      name: "confluence",
+      npmPackage: "confluence-mcp",
+      localPath: null,
+      requiredEnvVars: [
+        "CONFLUENCE_URL",
+        "CONFLUENCE_USERNAME",
+        "CONFLUENCE_API_TOKEN",
       ],
     },
   });
 
-  // Kyg Kmesh (local server)
   await prisma.mcpServer.upsert({
     where: { name: "kyg-kmesh" },
     update: {},

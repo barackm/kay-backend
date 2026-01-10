@@ -27,7 +27,9 @@ export async function getAvailableTools(
         credential.server.npmPackage || credential.server.localPath;
 
       if (!serverPath) {
-        console.log(`[getAvailableTools] No path for ${credential.server.name}, skipping`);
+        console.log(
+          `[getAvailableTools] No path for ${credential.server.name}, skipping`
+        );
         continue;
       }
 
@@ -167,20 +169,15 @@ export async function callMcpTool(
     console.log(`[callMcpTool] Using user token as BEARER_TOKEN`);
   }
 
-  if (
-    serverName === "jira" ||
-    serverName === "bitbucket" ||
-    serverName === "confluence"
-  ) {
-    if (!envVars.ATLASSIAN_USER_EMAIL) {
-      console.error(
-        `[callMcpTool] Missing ATLASSIAN_USER_EMAIL for ${serverName}`
-      );
+  if (serverName === "jira") {
+    if (!envVars.JIRA_EMAIL) {
+      console.error(`[callMcpTool] Missing JIRA_EMAIL for ${serverName}`);
     }
-    if (!envVars.ATLASSIAN_API_TOKEN) {
-      console.error(
-        `[callMcpTool] Missing ATLASSIAN_API_TOKEN for ${serverName}`
-      );
+    if (!envVars.JIRA_API_TOKEN) {
+      console.error(`[callMcpTool] Missing JIRA_API_TOKEN for ${serverName}`);
+    }
+    if (!envVars.JIRA_HOST) {
+      console.error(`[callMcpTool] Missing JIRA_HOST for ${serverName}`);
     }
   }
 

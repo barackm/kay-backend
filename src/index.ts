@@ -2,7 +2,6 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { serve } from "@hono/node-server";
 import { swaggerUI } from "@hono/swagger-ui";
 import { ENV } from "./config/env.js";
-import { createHealthRouter } from "./routes/health.js";
 import { createMcpRouter } from "./routes/mcp.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createChatRouter } from "./routes/chat.js";
@@ -29,7 +28,6 @@ app.get("/", (c) => {
 
 // Mount routers
 app.route("/auth", createAuthRouter());
-app.route("/health", createHealthRouter(registry));
 app.route("/mcp", createMcpRouter(registry));
 app.route("/", createChatRouter(registry));
 
