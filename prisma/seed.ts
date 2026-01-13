@@ -29,13 +29,13 @@ async function main() {
     update: {
       npmPackage: "bitbucket-mcp",
       localPath: null,
-      requiredEnvVars: ["BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
+      requiredEnvVars: ["BITBUCKET_TOKEN"],
     },
     create: {
       name: "bitbucket",
       npmPackage: "bitbucket-mcp",
       localPath: null,
-      requiredEnvVars: ["BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
+      requiredEnvVars: ["BITBUCKET_TOKEN"],
     },
   });
 

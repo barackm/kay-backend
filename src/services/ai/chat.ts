@@ -4,6 +4,11 @@ import { MCPServerRegistry } from "../mcp/server-registry.js";
 import { getAvailableTools, callMcpTool } from "./mcp-tools.js";
 import { SYSTEM_PROMPT } from "./prompts.js";
 import { gatherProactiveContext } from "./context.js";
+import {
+  getConversationMessages,
+  saveMessage,
+  createConversation,
+} from "./conversation.js";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -17,6 +22,7 @@ interface ChatRequest {
 
 interface ChatUser {
   id: string;
+  email: string;
   token: string;
 }
 
@@ -50,10 +56,44 @@ export async function createChatResponse(
   registry: MCPServerRegistry,
   user: ChatUser,
   request: ChatRequest,
-  interactive: boolean
+  interactive: boolean,
+  conversationId?: string
 ) {
-  if (!request.message && !request.messages) {
-    throw new Error("message or messages is required");
+  let activeConversationId = conversationId;
+  let conversationMessages: ChatMessage[] = [];
+  let newUserMessage: string | null = null;
+
+  if (conversationId) {
+    conversationMessages = getConversationMessages(
+      user.id,
+      conversationId
+    ) as ChatMessage[];
+    if (conversationMessages.length === 0) {
+      throw new Error("Conversation not found");
+    }
+    if (request.message) {
+      newUserMessage = request.message;
+    } else {
+      throw new Error("message is required when using conversationId");
+    }
+  } else {
+    if (!request.message && !request.messages) {
+      throw new Error("message or messages is required");
+    }
+    if (request.message) {
+      newUserMessage = request.message;
+      const newConversation = createConversation(user.id);
+      activeConversationId = newConversation.id;
+    } else if (request.messages && request.messages.length > 0) {
+      conversationMessages = request.messages.slice(0, -1);
+      newUserMessage = request.messages[request.messages.length - 1].content;
+      const newConversation = createConversation(user.id);
+      activeConversationId = newConversation.id;
+    }
+  }
+
+  if (newUserMessage && activeConversationId) {
+    saveMessage(user.id, activeConversationId, "user", newUserMessage);
   }
 
   // First, get available tools (this establishes MCP connections)
@@ -84,164 +124,49 @@ export async function createChatResponse(
     });
   }
 
-  // Build system prompt with dynamic context
-  const systemPromptWithContext = proactiveContext
-    ? `${SYSTEM_PROMPT}\n${proactiveContext}`
-    : SYSTEM_PROMPT;
+  // Build system prompt with user identity and dynamic context
+  const userContext = `
+Current System User:
+- Email: ${user.email}
+- User ID: ${user.id}
+Note: This is the identity of the currently logged-in user in the Kay system. This is separate from MCP server credentials - each MCP server (Jira, Bitbucket, etc.) has its own way to identify users through their respective tools.`;
 
-  console.log(`[Chat] System prompt length: ${systemPromptWithContext.length}, has context: ${!!proactiveContext}`);
+  let systemPromptWithContext = `${SYSTEM_PROMPT}\n${userContext}`;
+  if (proactiveContext) {
+    systemPromptWithContext += `\n${proactiveContext}`;
+  }
+
+  const messagesForAI: ChatMessage[] = [...conversationMessages];
+  if (newUserMessage) {
+    messagesForAI.push({ role: "user", content: newUserMessage });
+  }
 
   const messages: Array<{
     role: "system" | "user" | "assistant";
     content: string;
   }> = [
     { role: "system", content: systemPromptWithContext },
-    ...(
-      request.messages || [
-        { role: "user" as const, content: request.message || "" },
-      ]
-    ).map((msg) => ({
+    ...messagesForAI.map((msg) => ({
       role: msg.role,
       content: msg.content,
     })),
   ];
 
-  if (interactive) {
-    const streamOptions: {
-      model: string;
-      messages: Array<{
-        role: "system" | "user" | "assistant";
-        content: string;
-      }>;
-      stream: true;
-      tools?: typeof functions;
-    } = {
-      model: "gpt-4o",
-      messages,
-      stream: true,
-    };
+  // Both interactive and non-interactive modes work the same way:
+  // - Make API call to OpenAI
+  // - If AI wants to call tools, execute them and feed results back
+  // - Repeat until AI gives a final response (max 5 iterations)
+  // The difference is just how the client manages conversation history
 
-    if (functions.length > 0) {
-      streamOptions.tools = functions;
-    }
-
-    const stream = await openai.chat.completions.create(streamOptions);
-
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          try {
-            // Track tool call arguments as they're being streamed
-            const toolCallBuffer: Record<string, { name: string; args: string }> = {};
-
-            for await (const chunk of stream) {
-              const delta = chunk.choices[0]?.delta;
-              if (delta?.content) {
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    `data: ${JSON.stringify({ content: delta.content })}\n\n`
-                  )
-                );
-              }
-
-              if (delta?.tool_calls) {
-                for (const toolCall of delta.tool_calls) {
-                  const index = toolCall.index;
-
-                  // Initialize buffer for this tool call if it doesn't exist
-                  if (!toolCallBuffer[index]) {
-                    toolCallBuffer[index] = { name: "", args: "" };
-                  }
-
-                  // Accumulate the function name
-                  if (toolCall.function?.name) {
-                    toolCallBuffer[index].name = toolCall.function.name;
-                  }
-
-                  // Accumulate the arguments
-                  if (toolCall.function?.arguments) {
-                    toolCallBuffer[index].args += toolCall.function.arguments;
-                  }
-                }
-              }
-
-              // Check if the stream has finished (no more deltas)
-              const finishReason = chunk.choices[0]?.finish_reason;
-              if (finishReason === "tool_calls") {
-                // Now process all accumulated tool calls
-                for (const bufferedCall of Object.values(toolCallBuffer)) {
-                  if (bufferedCall.name && bufferedCall.args) {
-                    try {
-                      const args = JSON.parse(bufferedCall.args);
-                      const firstUnderscore = bufferedCall.name.indexOf("_");
-
-                      if (firstUnderscore > 0) {
-                        const serverName = bufferedCall.name.substring(0, firstUnderscore);
-                        const mcpToolName = bufferedCall.name.substring(firstUnderscore + 1);
-
-                        const result = await callMcpTool(
-                          registry,
-                          user.id,
-                          user.token,
-                          serverName,
-                          mcpToolName,
-                          args
-                        );
-
-                        controller.enqueue(
-                          new TextEncoder().encode(
-                            `data: ${JSON.stringify({
-                              tool_result: { name: bufferedCall.name, result },
-                            })}\n\n`
-                          )
-                        );
-                      }
-                    } catch (error) {
-                      console.error(
-                        `[Chat] Error calling tool ${bufferedCall.name} in stream:`,
-                        error
-                      );
-                      const errorMessage =
-                        error instanceof Error ? error.message : String(error);
-                      controller.enqueue(
-                        new TextEncoder().encode(
-                          `data: ${JSON.stringify({
-                            tool_result: {
-                              name: bufferedCall.name,
-                              error: errorMessage,
-                            },
-                          })}\n\n`
-                        )
-                      );
-                    }
-                  }
-                }
-              }
-            }
-            controller.close();
-          } catch (error) {
-            controller.error(error);
-          }
-        },
-      }),
-      {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      }
-    );
-  }
-
-  // Allow multiple rounds of tool calling (max 5 iterations to prevent infinite loops)
   const MAX_ITERATIONS = 5;
   let currentMessages = messages;
   let iteration = 0;
 
   while (iteration < MAX_ITERATIONS) {
     iteration++;
-    console.log(`[Chat] Tool calling iteration ${iteration}/${MAX_ITERATIONS}`);
+    console.log(
+      `[Chat] Iteration ${iteration}/${MAX_ITERATIONS}, interactive: ${interactive}`
+    );
 
     const completionOptions: {
       model: string;
@@ -256,6 +181,9 @@ export async function createChatResponse(
       completionOptions.tools = functions;
     }
 
+    console.log(
+      `[Chat] Calling OpenAI with ${currentMessages.length} messages, ${functions.length} tools`
+    );
     const completion = await openai.chat.completions.create(completionOptions);
     const assistantMessage = completion.choices[0]?.message;
 
@@ -264,14 +192,54 @@ export async function createChatResponse(
       break;
     }
 
+    console.log(
+      `[Chat] Assistant response received - content length: ${
+        assistantMessage.content?.length || 0
+      }, tool_calls: ${assistantMessage.tool_calls?.length || 0}`
+    );
+
     // If no tool calls, we're done
-    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      console.log(`[Chat] No tool calls in iteration ${iteration}, finishing`);
-      return { response: assistantMessage.content || "" };
+    if (
+      !assistantMessage.tool_calls ||
+      assistantMessage.tool_calls.length === 0
+    ) {
+      const finalResponse = assistantMessage.content || "";
+      console.log(
+        `[Chat] Final response (first 100 chars): ${finalResponse.substring(
+          0,
+          100
+        )}...`
+      );
+
+      if (activeConversationId) {
+        saveMessage(user.id, activeConversationId, "assistant", finalResponse);
+      }
+
+      // Build result - include messages array for interactive mode
+      const result: {
+        response: string;
+        conversationId: string | undefined;
+        messages?: ChatMessage[];
+      } = { response: finalResponse, conversationId: activeConversationId };
+
+      if (interactive) {
+        // Return conversation history so client can send it back on next request
+        const updatedMessages: ChatMessage[] = [
+          ...messagesForAI,
+          { role: "assistant" as const, content: finalResponse },
+        ];
+        result.messages = updatedMessages;
+      }
+
+      console.log(
+        `[Chat] Returning to client:`,
+        JSON.stringify(result).substring(0, 500)
+      );
+      return result;
     }
 
     console.log(
-      `[Chat] Processing ${assistantMessage.tool_calls.length} tool call(s) in iteration ${iteration}`
+      `[Chat] Processing ${assistantMessage.tool_calls.length} tool call(s)`
     );
 
     // Execute all tool calls
@@ -295,10 +263,6 @@ export async function createChatResponse(
           const args = JSON.parse(toolCall.function.arguments || "{}");
 
           try {
-            console.log(
-              `[Chat] Calling tool ${toolCall.function.name} with args:`,
-              Object.keys(args)
-            );
             const result = await callMcpTool(
               registry,
               user.id,
@@ -313,9 +277,6 @@ export async function createChatResponse(
             if (resultContent.length > 4000) {
               const truncated = resultContent.substring(0, 4000);
               resultContent = truncated + "... [truncated due to length]";
-              console.log(
-                `[Chat] Tool result truncated from ${JSON.stringify(result).length} to 4000 chars`
-              );
             }
 
             toolResults.push({
@@ -324,10 +285,6 @@ export async function createChatResponse(
               content: resultContent,
             });
           } catch (error) {
-            console.error(
-              `[Chat] Error calling tool ${toolCall.function.name}:`,
-              error
-            );
             const errorMessage =
               error instanceof Error ? error.message : String(error);
             toolResults.push({
@@ -352,18 +309,39 @@ export async function createChatResponse(
         content: assistantMessage.content,
         tool_calls: assistantMessage.tool_calls,
       } as any,
-      ...toolResults as any,
+      ...(toolResults as any),
     ];
 
     // Continue to next iteration to let AI process tool results
   }
 
   // If we hit max iterations, return whatever the last message was
-  console.log(`[Chat] Reached max iterations (${MAX_ITERATIONS}), returning last response`);
   const lastCompletion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: currentMessages,
   });
 
-  return { response: lastCompletion.choices[0]?.message?.content || "I've completed the requested actions." };
+  const finalResponse =
+    lastCompletion.choices[0]?.message?.content ||
+    "I've completed the requested actions.";
+
+  if (activeConversationId) {
+    saveMessage(user.id, activeConversationId, "assistant", finalResponse);
+  }
+
+  const result: {
+    response: string;
+    conversationId: string | undefined;
+    messages?: ChatMessage[];
+  } = { response: finalResponse, conversationId: activeConversationId };
+
+  if (interactive) {
+    const updatedMessages: ChatMessage[] = [
+      ...messagesForAI,
+      { role: "assistant" as const, content: finalResponse },
+    ];
+    result.messages = updatedMessages;
+  }
+
+  return result;
 }

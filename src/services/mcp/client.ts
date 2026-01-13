@@ -23,7 +23,6 @@ export class MCPClient {
     env: Record<string, string> = {},
     serverName?: string
   ): Promise<void> {
-    console.log(`[MCPClient] Connecting to server: ${serverPath}`);
     this.serverName = serverName || null;
     this.serverEnv = { ...env };
 
@@ -35,25 +34,16 @@ export class MCPClient {
 
     try {
       await this.client.connect(this.transport);
-      console.log(`[MCPClient] Connected successfully`);
     } catch (error) {
-      console.error(`[MCPClient] Connection failed:`, error);
       throw error;
     }
   }
 
   async listTools(): Promise<{ tools: unknown[] }> {
-    console.log(`[MCPClient] Listing tools...`);
     try {
       const result = await this.client.listTools();
-      console.log(
-        `[MCPClient] Found ${
-          Array.isArray(result.tools) ? result.tools.length : 0
-        } tools`
-      );
       return result;
     } catch (error) {
-      console.error(`[MCPClient] listTools failed:`, error);
       throw error;
     }
   }
@@ -62,11 +52,6 @@ export class MCPClient {
     name: string,
     args: Record<string, unknown> = {}
   ): Promise<unknown> {
-    console.log(
-      `[MCPClient] Calling tool ${name} with args:`,
-      JSON.stringify(args, null, 2)
-    );
-
     // Workaround for deprecated Jira API endpoints
     // This ensures ALL code using MCPClient automatically gets the fix
     if (this.serverName === "jira") {
@@ -75,18 +60,12 @@ export class MCPClient {
       const apiToken = this.serverEnv.JIRA_API_TOKEN;
 
       if (name === "search_issues" && baseUrl && email && apiToken) {
-        console.log(
-          `[MCPClient] Using direct Jira API for ${name} (workaround for deprecated endpoint)`
-        );
         const jql = args.jql as string;
         const maxResults = (args.maxResults as number) || 50;
         return searchIssuesDirect(baseUrl, email, apiToken, jql, maxResults);
       }
 
       if (name === "get_board_issues" && baseUrl && email && apiToken) {
-        console.log(
-          `[MCPClient] Using direct Jira API for ${name} (workaround for deprecated endpoint)`
-        );
         const boardId = args.boardId as string;
         const maxResults = (args.maxResults as number) || 50;
         const assigneeFilter = args.assigneeFilter as string | undefined;
@@ -108,16 +87,10 @@ export class MCPClient {
       name,
       arguments: args,
     });
-    console.log(`[MCPClient] Tool ${name} result type:`, typeof result);
-    console.log(
-      `[MCPClient] Tool ${name} result:`,
-      JSON.stringify(result, null, 2)
-    );
     return result;
   }
 
   async disconnect(): Promise<void> {
-    console.log(`[MCPClient] Disconnecting...`);
     try {
       if (this.client) {
         await this.client.close();
@@ -125,9 +98,7 @@ export class MCPClient {
       if (this.transport) {
         await this.transport.close();
       }
-      console.log(`[MCPClient] Disconnected successfully`);
     } catch (error) {
-      console.error(`[MCPClient] Disconnect error:`, error);
       throw error;
     }
   }

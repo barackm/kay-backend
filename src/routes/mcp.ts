@@ -106,7 +106,7 @@ const connectRoute = createRoute({
 
 Required environment variables by server:
 - **jira**: JIRA_HOST (will be mapped to JIRA_BASE_URL), JIRA_EMAIL, JIRA_API_TOKEN
-- **bitbucket**: BITBUCKET_USERNAME, BITBUCKET_APP_PASSWORD
+- **bitbucket**: BITBUCKET_TOKEN (API token - alternative to BITBUCKET_USERNAME/BITBUCKET_PASSWORD. App passwords are deprecated)
 - **confluence**: CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
 - **kyg-kmesh**: API_BASE_URL, BEARER_TOKEN`,
   security: [{ bearerAuth: [] }],
@@ -283,11 +283,6 @@ export function createMcpRouter(registry: MCPServerRegistry) {
             .filter((tool) => tool !== null)
         : [];
 
-      console.log(
-        `[Route] Status check for ${name}:`,
-        JSON.stringify(tools, null, 2)
-      );
-
       return c.json({
         serverName: name,
         connected: true,
@@ -309,32 +304,23 @@ export function createMcpRouter(registry: MCPServerRegistry) {
       const body = c.req.valid("json");
       const { env } = body;
 
-      console.log(
-        `[Route] Connect request for ${serverName} by user ${user.id}`
-      );
-
       const server = await prisma.mcpServer.findUnique({
         where: { name: serverName },
       });
 
       if (!server) {
-        console.log(`[Route] Server ${serverName} not found in database`);
         return c.json({ error: `Server ${serverName} not found` }, 404);
       }
 
       let envVars: Record<string, string> = {};
 
       if (env) {
-        console.log(`[Route] Using provided credentials for ${serverName}`);
         if (server.requiredEnvVars) {
           const requiredVars = (server.requiredEnvVars as string[]).filter(
             (key) => key !== "BEARER_TOKEN"
           );
           const missingVars = requiredVars.filter((key) => !env[key]);
           if (missingVars.length > 0) {
-            console.log(
-              `[Route] Missing required vars: ${missingVars.join(", ")}`
-            );
             return c.json(
               {
                 error: `Missing required environment variables: ${missingVars.join(
@@ -368,7 +354,6 @@ export function createMcpRouter(registry: MCPServerRegistry) {
 
         envVars = env;
       } else {
-        console.log(`[Route] Loading saved credentials for ${serverName}`);
         const credential = await prisma.userServerCredential.findUnique({
           where: {
             userId_serverId: {
@@ -379,7 +364,6 @@ export function createMcpRouter(registry: MCPServerRegistry) {
         });
 
         if (!credential) {
-          console.log(`[Route] No saved credentials found for ${serverName}`);
           return c.json(
             {
               error: `Credentials not found for ${serverName}. Please provide credentials in the request body.`,
@@ -397,11 +381,6 @@ export function createMcpRouter(registry: MCPServerRegistry) {
           );
           const missingVars = requiredVars.filter((key) => !envVars[key]);
           if (missingVars.length > 0) {
-            console.log(
-              `[Route] Saved credentials missing required vars: ${missingVars.join(
-                ", "
-              )}`
-            );
             return c.json(
               {
                 error: `Saved credentials are missing required environment variables: ${missingVars.join(
@@ -416,39 +395,28 @@ export function createMcpRouter(registry: MCPServerRegistry) {
 
       if (!envVars.BEARER_TOKEN) {
         envVars.BEARER_TOKEN = user.token;
-        console.log(`[Route] Using user token as BEARER_TOKEN`);
       }
 
       const serverPath = server.npmPackage || server.localPath;
       if (!serverPath) {
-        console.log(`[Route] No server path configured for ${serverName}`);
         return c.json(
           { error: `Server path not configured for ${serverName}` },
           500
         );
       }
 
-      console.log(`[Route] Connecting to ${serverName}...`);
       const client = await registry.ensureConnected(user.id, {
         name: serverName,
         path: serverPath,
         env: envVars,
       });
 
-      console.log(`[Route] Verifying connection by listing tools...`);
       await client.listTools();
-      console.log(`[Route] ${serverName} connected and verified successfully`);
 
       return c.json({
         message: `Credentials saved and connection verified for server: ${serverName}`,
       });
     } catch (error) {
-      const serverName = c.req.param("serverName");
-      console.error(`[Route] Connect error for ${serverName}:`, error);
-      if (error instanceof Error) {
-        console.error(`[Route] Error message: ${error.message}`);
-        console.error(`[Route] Error stack:`, error.stack);
-      }
       return c.json(
         { error: error instanceof Error ? error.message : "Unknown error" },
         500

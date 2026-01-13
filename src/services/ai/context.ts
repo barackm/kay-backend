@@ -12,13 +12,12 @@ export async function gatherProactiveContext(
     const jiraClient = registry.getClient(userId, "jira");
     if (jiraClient) {
       try {
-        console.log("[Context] Fetching Jira projects...");
         const projects = await callMcpTool(
           registry,
           userId,
           userToken,
           "jira",
-          "list_projects",
+          "get_projects",
           {}
         );
 
@@ -37,19 +36,51 @@ export async function gatherProactiveContext(
                   .map((p: any) => `${p.key} (${p.name})`)
                   .join(", ");
                 contextParts.push(`\nAvailable Jira Projects: ${projectList}`);
-                console.log(`[Context] Found ${parsed.length} Jira projects`);
               }
             } catch (parseError) {
-              console.error(
-                "[Context] Error parsing Jira projects:",
-                parseError
-              );
+              const markdownMatch = textContent.match(/\| Key \| Name \|/);
+              if (markdownMatch) {
+                const lines = textContent.split("\n");
+                const projectLines: string[] = [];
+                let inTable = false;
+
+                for (const line of lines) {
+                  if (line.includes("| Key | Name |")) {
+                    inTable = true;
+                    continue;
+                  }
+                  if (
+                    inTable &&
+                    line.startsWith("|") &&
+                    !line.includes("---")
+                  ) {
+                    const parts = line
+                      .split("|")
+                      .map((p) => p.trim())
+                      .filter((p) => p);
+                    if (parts.length >= 2) {
+                      const key = parts[0];
+                      const name = parts[1];
+                      if (key && name && key !== "Key") {
+                        projectLines.push(`${key} (${name})`);
+                      }
+                    }
+                  }
+                  if (inTable && line.trim() === "") {
+                    break;
+                  }
+                }
+
+                if (projectLines.length > 0) {
+                  contextParts.push(
+                    `\nAvailable Jira Projects: ${projectLines.join(", ")}`
+                  );
+                }
+              }
             }
           }
         }
-      } catch (error) {
-        console.error("[Context] Error fetching Jira projects:", error);
-      }
+      } catch (error) {}
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -57,16 +88,9 @@ export async function gatherProactiveContext(
       !errorMessage.includes("No connections") &&
       !errorMessage.includes("not connected")
     ) {
-      console.error("[Context] Error gathering proactive context:", error);
     }
   }
 
   const result = contextParts.join("\n");
-  console.log(
-    `[Context] Returning context (length: ${result.length}): ${result.substring(
-      0,
-      200
-    )}`
-  );
   return result;
 }

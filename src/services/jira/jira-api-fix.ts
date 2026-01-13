@@ -1,9 +1,9 @@
 /**
  * Workaround for deprecated Jira API endpoints in @orengrinker/jira-mcp-server
- * 
+ *
  * This module provides direct implementations of search_issues and get_board_issues
  * using the correct Jira API endpoints until the package is updated.
- * 
+ *
  * Reference: https://developer.atlassian.com/changelog/#CHANGE-2046
  */
 

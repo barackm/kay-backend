@@ -60,6 +60,3 @@ serve({
   fetch: app.fetch,
   port: ENV.PORT,
 });
-
-console.log(`Server is running on port ${ENV.PORT}`);
-console.log(`API Documentation available at http://localhost:${ENV.PORT}/api`);
