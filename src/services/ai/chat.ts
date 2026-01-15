@@ -103,7 +103,8 @@ export async function createChatResponse(
   const proactiveContext = await gatherProactiveContext(
     user.id,
     user.token,
-    registry
+    registry,
+    user.email
   );
 
   const functions = [];
@@ -162,11 +163,24 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
   let currentMessages = messages;
   let iteration = 0;
 
+  // Check if kyg-kmesh tools are available or if conversation mentions k-mesh
+  const hasKmeshTools = availableTools.some(
+    (tool) => tool.server === "kyg-kmesh"
+  );
+  const mentionsKmesh = currentMessages.some(
+    (msg) =>
+      msg.content &&
+      typeof msg.content === "string" &&
+      msg.content.toLowerCase().includes("k-mesh")
+  );
+
   while (iteration < MAX_ITERATIONS) {
     iteration++;
-    console.log(
-      `[Chat] Iteration ${iteration}/${MAX_ITERATIONS}, interactive: ${interactive}`
-    );
+    if (hasKmeshTools || mentionsKmesh) {
+      console.log(
+        `[Chat:kyg-kmesh] Iteration ${iteration}/${MAX_ITERATIONS}, interactive: ${interactive}`
+      );
+    }
 
     const completionOptions: {
       model: string;
@@ -181,22 +195,28 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
       completionOptions.tools = functions;
     }
 
-    console.log(
-      `[Chat] Calling OpenAI with ${currentMessages.length} messages, ${functions.length} tools`
-    );
+    if (hasKmeshTools || mentionsKmesh) {
+      console.log(
+        `[Chat:kyg-kmesh] Calling OpenAI with ${currentMessages.length} messages, ${functions.length} tools`
+      );
+    }
     const completion = await openai.chat.completions.create(completionOptions);
     const assistantMessage = completion.choices[0]?.message;
 
     if (!assistantMessage) {
-      console.log(`[Chat] No assistant message received`);
+      if (hasKmeshTools || mentionsKmesh) {
+        console.log(`[Chat:kyg-kmesh] No assistant message received`);
+      }
       break;
     }
 
-    console.log(
-      `[Chat] Assistant response received - content length: ${
-        assistantMessage.content?.length || 0
-      }, tool_calls: ${assistantMessage.tool_calls?.length || 0}`
-    );
+    if (hasKmeshTools || mentionsKmesh) {
+      console.log(
+        `[Chat:kyg-kmesh] Assistant response received - content length: ${
+          assistantMessage.content?.length || 0
+        }, tool_calls: ${assistantMessage.tool_calls?.length || 0}`
+      );
+    }
 
     // If no tool calls, we're done
     if (
@@ -204,12 +224,14 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
       assistantMessage.tool_calls.length === 0
     ) {
       const finalResponse = assistantMessage.content || "";
-      console.log(
-        `[Chat] Final response (first 100 chars): ${finalResponse.substring(
-          0,
-          100
-        )}...`
-      );
+      if (hasKmeshTools || mentionsKmesh) {
+        console.log(
+          `[Chat:kyg-kmesh] Final response (first 100 chars): ${finalResponse.substring(
+            0,
+            100
+          )}...`
+        );
+      }
 
       if (activeConversationId) {
         saveMessage(user.id, activeConversationId, "assistant", finalResponse);
@@ -231,16 +253,20 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
         result.messages = updatedMessages;
       }
 
-      console.log(
-        `[Chat] Returning to client:`,
-        JSON.stringify(result).substring(0, 500)
-      );
+      if (hasKmeshTools || mentionsKmesh) {
+        console.log(
+          `[Chat:kyg-kmesh] Returning to client:`,
+          JSON.stringify(result).substring(0, 500)
+        );
+      }
       return result;
     }
 
-    console.log(
-      `[Chat] Processing ${assistantMessage.tool_calls.length} tool call(s)`
-    );
+    if (hasKmeshTools || mentionsKmesh) {
+      console.log(
+        `[Chat:kyg-kmesh] Processing ${assistantMessage.tool_calls.length} tool call(s)`
+      );
+    }
 
     // Execute all tool calls
     const toolResults: Array<{
@@ -262,6 +288,13 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
           );
           const args = JSON.parse(toolCall.function.arguments || "{}");
 
+          if (serverName === "kyg-kmesh") {
+            console.log(
+              `[Chat:kyg-kmesh] Executing tool: ${serverName}.${mcpToolName} with args:`,
+              JSON.stringify(args, null, 2)
+            );
+          }
+
           try {
             const result = await callMcpTool(
               registry,
@@ -272,11 +305,36 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
               args
             );
 
+            // Log tool responses in interactive mode
+            if (interactive) {
+              console.log(
+                `[Chat:interactive] Tool ${serverName}.${mcpToolName} response:`,
+                JSON.stringify(result, null, 2).substring(0, 1000)
+              );
+            }
+
+            if (serverName === "kyg-kmesh") {
+              console.log(
+                `[Chat:kyg-kmesh] Tool ${serverName}.${mcpToolName} succeeded. Result type:`,
+                typeof result
+              );
+            }
+
             // Truncate large results to prevent context overflow
             let resultContent = JSON.stringify(result);
+            if (serverName === "kyg-kmesh") {
+              console.log(
+                `[Chat:kyg-kmesh] Tool result length: ${resultContent.length} chars`
+              );
+            }
             if (resultContent.length > 4000) {
               const truncated = resultContent.substring(0, 4000);
               resultContent = truncated + "... [truncated due to length]";
+              if (serverName === "kyg-kmesh") {
+                console.log(
+                  `[Chat:kyg-kmesh] Tool result truncated from ${resultContent.length} to 4000 chars`
+                );
+              }
             }
 
             toolResults.push({
@@ -287,6 +345,27 @@ Note: This is the identity of the currently logged-in user in the Kay system. Th
           } catch (error) {
             const errorMessage =
               error instanceof Error ? error.message : String(error);
+
+            // Log tool errors in interactive mode
+            if (interactive) {
+              console.error(
+                `[Chat:interactive] Tool ${serverName}.${mcpToolName} error:`,
+                errorMessage
+              );
+            }
+
+            if (serverName === "kyg-kmesh") {
+              console.error(
+                `[Chat:kyg-kmesh] Tool ${serverName}.${mcpToolName} failed:`,
+                errorMessage
+              );
+              if (error instanceof Error && error.stack) {
+                console.error(
+                  `[Chat:kyg-kmesh] Tool error stack:`,
+                  error.stack
+                );
+              }
+            }
             toolResults.push({
               role: "tool",
               tool_call_id: toolCall.id,

@@ -127,7 +127,9 @@ export class MCPServerRegistry {
   }
 
   async disconnect(userId: string, name: string): Promise<void> {
-    console.log(`[Registry] Disconnecting ${name} for user ${userId}`);
+    if (name === "kyg-kmesh") {
+      console.log(`[Registry] Disconnecting ${name} for user ${userId}`);
+    }
     const userConnections = this.connections.get(userId);
     if (!userConnections) {
       throw new Error(`No connections found for user`);
@@ -142,7 +144,9 @@ export class MCPServerRegistry {
       this.connections.delete(userId);
       this.configs.delete(userId);
     }
-    console.log(`[Registry] ${name} disconnected`);
+    if (name === "kyg-kmesh") {
+      console.log(`[Registry] ${name} disconnected`);
+    }
   }
 
   getServerConfig(userId: string, name: string): ServerConfig {

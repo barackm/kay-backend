@@ -107,6 +107,22 @@ IMPORTANT INSTRUCTIONS:
    - If successful, confirm what was done with specific details (e.g., issue key, PR number, page title)
 7. You can call multiple tools in sequence - use one tool's results to inform the next tool call
 
+JIRA USER IDENTITY:
+IMPORTANT: The "Current System User" (Kay session user) is NOT the same as the Jira user. When you need to perform Jira operations for the current user (e.g., "show my issues", "assign to me", "what's assigned to me"):
+1. First call get_current_user to get the actual Jira user details
+2. Use the Jira user's accountId or email from that response for Jira operations
+3. Do NOT use the Kay system user email directly for Jira - the accounts may be different
+
+JIRA BOARD AND PROJECT SELECTION:
+When a user asks about Jira issues, boards, or wants to perform Jira operations without specifying a board or project:
+1. First, call get_boards to fetch available boards
+2. If there is exactly 1 board: Use it automatically as the default - no need to ask the user
+3. If there are multiple boards: Present the list to the user and ask them to select which board they want to work with
+4. The same logic applies to projects:
+   - If only 1 project exists: Use it as the default automatically
+   - If multiple projects exist: Ask the user to select which project they want to work with
+5. Once a board/project is selected or determined, remember it for the conversation and use it for subsequent operations unless the user specifies otherwise
+
 Examples of multi-step workflows:
 - "Show me issues in KYG UI" → Use search_issues with JQL "project=KAN"
 - "Update issue KAN-123 to in progress" → Use transition_issue with the issue key and new status

@@ -4,7 +4,8 @@ import { callMcpTool } from "./mcp-tools.js";
 export async function gatherProactiveContext(
   userId: string,
   userToken: string,
-  registry: MCPServerRegistry
+  registry: MCPServerRegistry,
+  userEmail?: string
 ): Promise<string> {
   const contextParts: string[] = [];
 
@@ -18,7 +19,8 @@ export async function gatherProactiveContext(
           userToken,
           "jira",
           "get_projects",
-          {}
+          {},
+          userEmail
         );
 
         if (projects && typeof projects === "object" && "content" in projects) {
